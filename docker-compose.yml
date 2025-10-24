@@ -132,6 +132,7 @@ services:
   chaos-backend:
     build: ./backend
     container_name: chaos-backend
+    privileged: true
     environment:
       EAST_API: http://toxiproxy-east:8474
       WEST_API: http://toxiproxy-west:8474
@@ -145,6 +146,8 @@ services:
       DB_NAME: defaultdb
     ports:
       - "8088:8088"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - haproxy
       - toxiproxy-east

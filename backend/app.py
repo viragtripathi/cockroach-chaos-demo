@@ -68,14 +68,39 @@ def _clear_toxics(api, name):
         for toxic in r.json():
             requests.delete(f"{api}/proxies/{name}/toxics/{toxic['name']}", timeout=3)
 
+def _check_containers_running(containers):
+    """Check if all containers in the list are running"""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "status=running", "--format", "{{.Names}}"],
+            capture_output=True,
+            timeout=5,
+            text=True
+        )
+        if result.returncode == 0:
+            running_containers = set(result.stdout.strip().split('\n'))
+            return all(c in running_containers for c in containers)
+    except Exception:
+        pass
+    return True  # Default to true if we can't check (fail open)
+
 @app.get("/api/status")
 def status():
     result = {}
     for region, cfg in REGIONS.items():
         try:
             proxies = _list_proxies(cfg["api"])
-            up = any(proxies.get(n, {}).get("enabled", False) for n in cfg["proxies"])
-            result[region] = {"up": up, "proxies": {n: proxies.get(n, {}) for n in cfg["proxies"]}}
+            proxies_enabled = any(proxies.get(n, {}).get("enabled", False) for n in cfg["proxies"])
+            containers_running = _check_containers_running(cfg["containers"])
+            
+            # Region is up only if BOTH proxies are enabled AND containers are running
+            up = proxies_enabled and containers_running
+            
+            result[region] = {
+                "up": up,
+                "proxies": {n: proxies.get(n, {}) for n in cfg["proxies"]},
+                "containers_running": containers_running
+            }
         except Exception as e:
             result[region] = {"up": False, "error": str(e)}
     return result
