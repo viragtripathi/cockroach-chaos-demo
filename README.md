@@ -2,6 +2,8 @@
 
 Interactive demonstration of CockroachDB's resilience during network partitions.
 
+![CockroachDB Chaos Demo](backend/static/cockroachdb-chaos-demo.png)
+
 ## 🚀 Quick Start
 
 ```bash
