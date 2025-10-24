@@ -1,0 +1,14 @@
+[
+  {
+    "name": "w2a",
+    "listen": "0.0.0.0:16011",
+    "upstream": "crdb-w2a:26257",
+    "enabled": true
+  },
+  {
+    "name": "w2b",
+    "listen": "0.0.0.0:16012",
+    "upstream": "crdb-w2b:26257",
+    "enabled": true
+  }
+]

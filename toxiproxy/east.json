@@ -1,0 +1,14 @@
+[
+  {
+    "name": "e1a",
+    "listen": "0.0.0.0:16001",
+    "upstream": "crdb-e1a:26257",
+    "enabled": true
+  },
+  {
+    "name": "e1b",
+    "listen": "0.0.0.0:16002",
+    "upstream": "crdb-e1b:26257",
+    "enabled": true
+  }
+]

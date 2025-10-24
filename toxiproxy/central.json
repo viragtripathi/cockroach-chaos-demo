@@ -1,0 +1,8 @@
+[
+  {
+    "name": "c1",
+    "listen": "0.0.0.0:16021",
+    "upstream": "crdb-c1:26257",
+    "enabled": true
+  }
+]
