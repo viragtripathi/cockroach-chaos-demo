@@ -4,7 +4,7 @@ import asyncio
 import random
 import subprocess
 from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import requests
@@ -39,6 +39,20 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/", response_class=HTMLResponse)
 def index():
     return FileResponse("static/index.html")
+
+@app.get("/api/config")
+def get_config(request: Request):
+    """Return dynamic configuration based on the request host"""
+    host = request.headers.get("host", "localhost:8088")
+    # Extract hostname without port
+    hostname = host.split(":")[0]
+    
+    return {
+        "haproxy_stats_url": f"http://{hostname}:8404/stats",
+        "crdb_admin_url": f"http://{hostname}:8080",
+        "db_connection_string": f"postgresql://root@{hostname}:26257/defaultdb?sslmode=disable",
+        "hostname": hostname
+    }
 
 def _list_proxies(api):
     r = requests.get(f"{api}/proxies", timeout=3)

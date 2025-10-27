@@ -623,11 +623,11 @@
       </p>
       <div class="info-title" style="margin-top: 16px;">📊 Resources</div>
       <ul class="info-links">
-        <li><a href="http://localhost:8404/stats" target="_blank">→ HAProxy Stats Dashboard</a></li>
-        <li><a href="http://localhost:8080" target="_blank">→ CockroachDB Admin Console (verify nodes alive)</a></li>
+        <li><a id="haproxy-link" href="#" target="_blank">→ HAProxy Stats Dashboard</a></li>
+        <li><a id="crdb-link" href="#" target="_blank">→ CockroachDB Admin Console (verify nodes alive)</a></li>
         <li style="opacity: 0.9; margin-left: 0;">
           <span style="opacity: 0.7;">→ Database Connection:</span><br>
-          <code style="background: rgba(105, 51, 255, 0.1); padding: 4px 8px; border-radius: 6px; font-size: 12px; display: inline-block; margin-top: 4px;">postgresql://root@localhost:26257/defaultdb?sslmode=disable</code>
+          <code id="db-conn-string" style="background: rgba(105, 51, 255, 0.1); padding: 4px 8px; border-radius: 6px; font-size: 12px; display: inline-block; margin-top: 4px;">Loading...</code>
         </li>
       </ul>
     </div>
@@ -639,10 +639,26 @@
 
   <script>
     let isActionInProgress = false;
+    let appConfig = null;
 
     async function call(path, opts={method:'POST'}) {
       const res = await fetch(path, opts);
       return res.json();
+    }
+
+    async function loadConfig() {
+      try {
+        appConfig = await fetch('/api/config').then(r => r.json());
+        document.getElementById('haproxy-link').href = appConfig.haproxy_stats_url;
+        document.getElementById('crdb-link').href = appConfig.crdb_admin_url;
+        document.getElementById('db-conn-string').textContent = appConfig.db_connection_string;
+      } catch (e) {
+        console.error('Failed to load config:', e);
+        // Fallback to localhost
+        document.getElementById('haproxy-link').href = 'http://localhost:8404/stats';
+        document.getElementById('crdb-link').href = 'http://localhost:8080';
+        document.getElementById('db-conn-string').textContent = 'postgresql://root@localhost:26257/defaultdb?sslmode=disable';
+      }
     }
 
     async function refresh() {
@@ -752,6 +768,7 @@
 
     setInterval(refresh, 1000);
     window.addEventListener('load', () => {
+      loadConfig();
       refresh();
       setTimeout(refresh, 500);
     });
