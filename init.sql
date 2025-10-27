@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS defaultdb.demo_transactions (
   amount INT NOT NULL
 );
 
--- Note: For full multi-region setup, your Banko AI app can run:
+-- Note: For full multi-region setup, Banko AI app can run:
 -- ALTER DATABASE defaultdb SET PRIMARY REGION "us-east-1";
 -- ALTER DATABASE defaultdb ADD REGION "us-west-2";
 -- ALTER DATABASE defaultdb ADD REGION "us-central-1";

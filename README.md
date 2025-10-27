@@ -14,7 +14,7 @@ Interactive demonstration of CockroachDB's resilience during network partitions.
 
 **Using a different CockroachDB version:**
 ```bash
-CRDB_VERSION=v24.3.0 ./run.sh
+CRDB_VERSION=v25.3.0 ./run.sh
 ```
 
 Wait ~10 seconds, then open: **http://localhost:8088**
