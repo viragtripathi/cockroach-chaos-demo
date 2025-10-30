@@ -19,16 +19,43 @@ CRDB_VERSION=v25.3.0 ./run.sh
 
 Wait ~10 seconds, then open: **http://localhost:8088**
 
-## Demo Flow (30 seconds)
+## Demo Flow
+
+### Quick Demo (30 seconds)
 
 1. **All regions green** → click "Recover" on each if needed
 2. **Click "🚀 Simulate Transactions"** → watch counter increment  
-3. **Click "✕ Kill" on us-east-1** → region turns red
+3. **Click "⚡ Partition" on us-east-1** → region turns red
 4. **Click "🚀 Simulate Transactions" again** → still works! ✨
-5. **Check admin console** → http://localhost:8080 → all nodes still alive!
-6. **Click "✓ Recover"** → back to green
+5. **Check admin console** → http://localhost:8080 → nodes marked as SUSPECT/DEAD
+6. **Check HAProxy stats** → http://localhost:8404/stats → partitioned nodes show RED
+7. **Click "✓ Recover"** → nodes rejoin cluster and turn green
 
-**Key Point:** We're simulating **network partitions**, not node failures. The CockroachDB cluster stays healthy internally.
+### Chaos Scenarios Explained
+
+**🟢 Recover:** Restores region connectivity and restarts any killed nodes.
+
+**🟡 Brownout (Degraded Performance):**
+- Adds configurable network latency (default 700ms) via Toxiproxy
+- Simulates slow/degraded network connections
+- Great for testing timeout handling and query performance under latency
+- CockroachDB continues operating but with slower response times
+
+**🟠 Partition (Network Partition):**
+- **True network partition** using Docker network disconnect
+- Nodes become completely isolated from the cluster
+- CockroachDB will mark them as SUSPECT (after ~5 seconds) then DEAD (after ~9 seconds)
+- HAProxy detects unhealthy nodes and reroutes traffic automatically
+- Nodes stay running but cannot communicate - check admin console to see them go SUSPECT/DEAD
+- **Key Demo Point:** This shows CockroachDB's consensus-based resilience during network splits
+
+**🔴 Kill (Abrupt Node Failure):**
+- Uses `docker kill -s SIGKILL` (like kill -9)
+- Simulates catastrophic crash/hardware failure (not graceful shutdown)
+- Nodes are terminated immediately without cleanup
+- CockroachDB cluster continues operating on remaining nodes
+- HAProxy immediately marks dead nodes as DOWN and reroutes
+- **Key Demo Point:** Shows resilience against sudden node crashes
 
 ## Architecture
 
@@ -54,10 +81,11 @@ Wait ~10 seconds, then open: **http://localhost:8088**
               (nodes communicate directly)
 ```
 
-**What "Kill" does:**
-- ❌ Blocks external connections through Toxiproxy
-- ✅ Nodes stay alive and communicate internally
-- ✅ HAProxy automatically routes to healthy regions
+**What happens during chaos:**
+- **Partition:** Nodes isolated via Docker network disconnect → marked SUSPECT/DEAD by CockroachDB
+- **Kill:** Nodes terminated with SIGKILL → immediate failure, no graceful shutdown
+- **Toxiproxy:** Used for Brownout (latency injection) only, not for network partition
+- ✅ HAProxy automatically detects unhealthy backends and routes to healthy regions
 
 ## Configuration
 
@@ -81,21 +109,36 @@ Point your [Banko AI](https://github.com/cockroachlabs-field/banko-ai-assistant-
 - Handle brief connection errors during failover
 - Continue operating when regions are "killed"
 
-**Expected behavior when killing a region:**
-- ⚠️ 1-2 brief connection errors (during failover)
-- ✅ Automatic recovery within seconds
-- ✅ All committed data safe
-- ✅ Cluster shows 5 healthy nodes in admin console
+**Expected behavior during chaos events:**
 
-See http://localhost:8080 to verify nodes stay alive during region kills.
+Partition:
+- ⚠️ Nodes marked SUSPECT (~5s) then DEAD (~9s) in admin console
+- ✅ HAProxy reroutes traffic to healthy regions within seconds
+- ✅ All committed data remains available
+- ✅ Transactions continue on available nodes
 
-## Brownout Mode
+Kill:
+- ⚠️ Immediate node termination (SIGKILL)
+- ✅ HAProxy detects failure and reroutes instantly
+- ✅ Cluster continues with remaining nodes
+- ✅ No data loss (replicas on other nodes)
 
-Test latency tolerance:
-1. Set latency (default 700ms) in the UI
-2. Click "⚠ Brownout" on a region
-3. Watch transactions slow but continue
-4. Shows CockroachDB handles degraded networks
+Brownout:
+- ⚠️ Queries slow down (configurable latency)
+- ✅ All operations eventually complete
+- ✅ Tests application timeout handling
+
+See http://localhost:8080 to monitor node status and liveness during chaos events.
+
+## Why Toxiproxy?
+
+Toxiproxy is used **only for Brownout scenarios** to inject configurable network latency. For true network partitions, we use Docker network disconnect to properly isolate nodes, which is the recommended approach per [CockroachDB documentation](https://www.cockroachlabs.com/docs/stable/cluster-setup-troubleshooting#network-partition).
+
+This approach ensures:
+- Network partitions properly trigger CockroachDB's consensus mechanism
+- Nodes are marked as SUSPECT then DEAD (observable in admin console)
+- HAProxy health checks accurately reflect node availability
+- Brownout scenarios test application timeout handling
 
 ## Additional Dashboards
 

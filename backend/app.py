@@ -34,6 +34,35 @@ DB_NAME = os.getenv("DB_NAME", "defaultdb")
 
 transaction_count = 0
 
+def _get_docker_network():
+    """Dynamically detect the Docker Compose network name"""
+    try:
+        # Try common network name patterns
+        for pattern in ["cockroach-chaos-demo_default", "default"]:
+            result = subprocess.run(
+                ["docker", "network", "ls", "--filter", f"name={pattern}", "--format", "{{.Name}}"],
+                capture_output=True,
+                timeout=3,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split('\n')[0]
+        
+        # Fallback: inspect one of our containers to get its network
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{range $key, $value := .NetworkSettings.Networks}}{{$key}}{{end}}", "crdb-e1a"],
+            capture_output=True,
+            timeout=3,
+            text=True
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split('\n')[0]
+    except Exception:
+        pass
+    
+    # Default fallback
+    return "cockroach-chaos-demo_default"
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
@@ -119,67 +148,118 @@ def status():
             result[region] = {"up": False, "error": str(e)}
     return result
 
-@app.post("/api/kill/{region}")
-def kill_region(region: str):
+@app.post("/api/partition/{region}")
+def partition_region(region: str):
+    """Simulate network partition by disconnecting containers from bridge network"""
     if region not in REGIONS: raise HTTPException(404, "Unknown region")
     cfg = REGIONS[region]
+    disconnected = []
+    network_name = _get_docker_network()
+    
+    for container in cfg["containers"]:
+        try:
+            result = subprocess.run(
+                ["docker", "network", "disconnect", network_name, container],
+                capture_output=True, 
+                timeout=5
+            )
+            if result.returncode == 0:
+                disconnected.append(container)
+        except Exception as e:
+            pass
+    
+    # Also disable toxiproxy to block external access
     for name in cfg["proxies"]:
         _clear_toxics(cfg["api"], name)
         _set_enabled(cfg["api"], name, False)
-    return {"ok": True, "region": region, "action": "kill"}
+    
+    return {"ok": True, "region": region, "action": "partition", "disconnected": disconnected}
 
 @app.post("/api/recover/{region}")
 def recover_region(region: str):
+    """Recover from network partition or node failure"""
     if region not in REGIONS: raise HTTPException(404, "Unknown region")
     cfg = REGIONS[region]
+    
+    # Reconnect to network
+    network_name = _get_docker_network()
+    reconnected = []
+    for container in cfg["containers"]:
+        try:
+            # Try to reconnect (will fail if already connected, which is fine)
+            subprocess.run(
+                ["docker", "network", "connect", network_name, container],
+                capture_output=True,
+                timeout=5
+            )
+            reconnected.append(container)
+        except Exception:
+            pass
+    
+    # Restart containers if they're not running
+    started = []
+    for container in cfg["containers"]:
+        try:
+            # Check if container is running
+            check = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", container],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            if check.returncode == 0 and check.stdout.strip() == "false":
+                result = subprocess.run(["docker", "start", container], capture_output=True, timeout=10)
+                if result.returncode == 0:
+                    started.append(container)
+        except Exception:
+            pass
+    
+    # Enable proxies
     for name in cfg["proxies"]:
         _clear_toxics(cfg["api"], name)
         _set_enabled(cfg["api"], name, True)
-    return {"ok": True, "region": region, "action": "recover"}
+    
+    return {"ok": True, "region": region, "action": "recover", "reconnected": reconnected, "started": started}
 
 @app.post("/api/brownout/{region}")
 def brownout_region(region: str, ms: int = 700):
+    """Simulate degraded network performance with latency"""
     if region not in REGIONS: raise HTTPException(404, "Unknown region")
     cfg = REGIONS[region]
+    
     for name in cfg["proxies"]:
         _clear_toxics(cfg["api"], name)
         _set_enabled(cfg["api"], name, True)
         _add_latency(cfg["api"], name, ms)
+    
     return {"ok": True, "region": region, "action": "brownout", "latency_ms": ms}
 
-@app.post("/api/kill-nodes/{region}")
+@app.post("/api/kill/{region}")
 def kill_nodes(region: str):
-    """Actually stop CockroachDB containers (node failure, not network partition)"""
+    """Abrupt node failure using docker kill (SIGKILL) - simulates crash"""
     if region not in REGIONS: raise HTTPException(404, "Unknown region")
     cfg = REGIONS[region]
-    stopped = []
+    killed = []
+    
     for container in cfg["containers"]:
         try:
-            result = subprocess.run(["docker", "stop", container], capture_output=True, timeout=10)
+            # Use docker kill with SIGKILL (like kill -9) for abrupt failure
+            result = subprocess.run(
+                ["docker", "kill", "-s", "SIGKILL", container],
+                capture_output=True,
+                timeout=10
+            )
             if result.returncode == 0:
-                stopped.append(container)
+                killed.append(container)
         except Exception as e:
             pass
-    return {"ok": True, "region": region, "action": "kill_nodes", "stopped": stopped}
-
-@app.post("/api/recover-nodes/{region}")
-def recover_nodes(region: str):
-    """Restart CockroachDB containers and enable proxies"""
-    if region not in REGIONS: raise HTTPException(404, "Unknown region")
-    cfg = REGIONS[region]
-    started = []
-    for container in cfg["containers"]:
-        try:
-            result = subprocess.run(["docker", "start", container], capture_output=True, timeout=10)
-            if result.returncode == 0:
-                started.append(container)
-        except Exception as e:
-            pass
-    # Also enable proxies
+    
+    # Also disable toxiproxy to block external access
     for name in cfg["proxies"]:
         _clear_toxics(cfg["api"], name)
-        _set_enabled(cfg["api"], name, True)
-    return {"ok": True, "region": region, "action": "recover_nodes", "started": started}
+        _set_enabled(cfg["api"], name, False)
+    
+    return {"ok": True, "region": region, "action": "kill", "killed": killed}
 
 def get_db_conn():
     try:

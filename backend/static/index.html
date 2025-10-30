@@ -274,20 +274,18 @@
     }
     
     .region-actions {
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: 12px;
-      flex-wrap: wrap;
       position: relative;
       z-index: 1;
     }
     
     .btn {
-      flex: 1;
-      min-width: 100px;
-      padding: 12px 20px;
+      padding: 12px 16px;
       border: none;
       border-radius: 12px;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.3s ease;
@@ -335,6 +333,17 @@
     .btn-brownout:hover {
       transform: translateY(-2px);
       box-shadow: 0 6px 25px rgba(251, 191, 36, 0.4);
+    }
+    
+    .btn-partition {
+      background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(249, 115, 22, 0.3);
+    }
+    
+    .btn-partition:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 25px rgba(249, 115, 22, 0.4);
     }
     
     .btn-kill {
@@ -519,7 +528,7 @@
     <div class="header-content">
       <div>
         <h1>🪲 CockroachDB Multi-Region Chaos Demo</h1>
-        <div class="subtitle">Simulate network partitions & node failures • Test resilience • Watch HAProxy failover</div>
+        <div class="subtitle">True Network Partitions • Abrupt Node Failures • Brownout Testing • Watch CockroachDB Survive</div>
       </div>
     </div>
   </div>
@@ -547,13 +556,6 @@
     <div class="control-panel">
       <div class="control-row">
         <div class="control-group">
-          <label class="control-label">Chaos Mode:</label>
-          <select id="chaos-mode">
-            <option value="partition">Network Partition (HAProxy reroutes)</option>
-            <option value="nodes">Node Failure (Actual stop/start)</option>
-          </select>
-        </div>
-        <div class="control-group">
           <label class="control-label">Brownout Latency:</label>
           <input id="latency" type="number" min="50" max="5000" step="50" value="700" />
           <span style="opacity: 0.6;">ms</span>
@@ -576,7 +578,8 @@
         <div class="region-actions">
           <button class="btn btn-recover" onclick="action('us-east-1','recover')">✓ Recover</button>
           <button class="btn btn-brownout" onclick="action('us-east-1','brownout')">⚠ Brownout</button>
-          <button class="btn btn-kill" onclick="action('us-east-1','kill')">✕ Kill</button>
+          <button class="btn btn-partition" onclick="action('us-east-1','partition')">⚡ Partition</button>
+          <button class="btn btn-kill" onclick="action('us-east-1','kill')">💀 Kill</button>
         </div>
       </div>
 
@@ -593,7 +596,8 @@
         <div class="region-actions">
           <button class="btn btn-recover" onclick="action('us-west-2','recover')">✓ Recover</button>
           <button class="btn btn-brownout" onclick="action('us-west-2','brownout')">⚠ Brownout</button>
-          <button class="btn btn-kill" onclick="action('us-west-2','kill')">✕ Kill</button>
+          <button class="btn btn-partition" onclick="action('us-west-2','partition')">⚡ Partition</button>
+          <button class="btn btn-kill" onclick="action('us-west-2','kill')">💀 Kill</button>
         </div>
       </div>
 
@@ -610,7 +614,8 @@
         <div class="region-actions">
           <button class="btn btn-recover" onclick="action('us-central-1','recover')">✓ Recover</button>
           <button class="btn btn-brownout" onclick="action('us-central-1','brownout')">⚠ Brownout</button>
-          <button class="btn btn-kill" onclick="action('us-central-1','kill')">✕ Kill</button>
+          <button class="btn btn-partition" onclick="action('us-central-1','partition')">⚡ Partition</button>
+          <button class="btn btn-kill" onclick="action('us-central-1','kill')">💀 Kill</button>
         </div>
       </div>
     </div>
@@ -618,8 +623,10 @@
     <div class="info-panel">
       <div class="info-title">💡 How It Works</div>
       <p style="opacity: 0.85; font-size: 13px; line-height: 1.6; margin-bottom: 16px;">
-        <strong>Network Partition Mode:</strong> Simulates network failures via Toxiproxy. HAProxy detects unhealthy nodes and instantly reroutes traffic to healthy regions. CockroachDB nodes stay running - check the admin console!<br><br>
-        <strong>Node Failure Mode:</strong> Actually stops Docker containers (docker stop). This demonstrates true resilience - your app retries connections and HAProxy redirects to available nodes. Recovery takes longer as containers restart.
+        <strong>🟢 Recover:</strong> Restores region connectivity and restarts any killed nodes.<br><br>
+        <strong>🟡 Brownout:</strong> Adds network latency (configurable ms) to simulate slow/degraded connections. Great for testing timeout handling!<br><br>
+        <strong>🟠 Partition:</strong> Simulates network partition by disconnecting nodes from Docker network. Nodes become isolated and will be marked as SUSPECT then DEAD by CockroachDB. HAProxy reroutes traffic.<br><br>
+        <strong>🔴 Kill:</strong> Abrupt node failure using SIGKILL (like kill -9 or crash). Simulates catastrophic failures. CockroachDB cluster continues operating on remaining nodes.
       </p>
       <div class="info-title" style="margin-top: 16px;">📊 Resources</div>
       <ul class="info-links">
@@ -710,28 +717,30 @@
       const buttons = card.querySelectorAll('.btn');
       buttons.forEach(b => b.disabled = true);
 
-      if (kind === 'kill') {
+      if (kind === 'kill' || kind === 'partition') {
         card.classList.add('killing');
       }
 
       try {
-        const chaosMode = document.getElementById('chaos-mode').value;
         const ms = document.getElementById('latency').value || 700;
         
         let path;
         if (kind === 'brownout') {
           path = `/api/brownout/${region}?ms=${ms}`;
+        } else if (kind === 'partition') {
+          path = `/api/partition/${region}`;
         } else if (kind === 'kill') {
-          path = chaosMode === 'nodes' ? `/api/kill-nodes/${region}` : `/api/kill/${region}`;
+          path = `/api/kill/${region}`;
         } else if (kind === 'recover') {
-          path = chaosMode === 'nodes' ? `/api/recover-nodes/${region}` : `/api/recover/${region}`;
+          path = `/api/recover/${region}`;
         } else {
           path = `/api/${kind}/${region}`;
         }
         
         await call(path);
         
-        const delay = chaosMode === 'nodes' ? 3000 : 1000;
+        // Give more time for kill/partition operations to settle
+        const delay = (kind === 'kill' || kind === 'partition') ? 3000 : 1000;
         setTimeout(async () => {
           await refresh();
           card.classList.remove('killing');
