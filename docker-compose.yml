@@ -2,7 +2,7 @@
 version: "3.9"
 
 x-cockroach-image: &cockroach-image
-  cockroachdb/cockroach:${CRDB_VERSION:-v25.3.3}
+  cockroachdb/cockroach:${CRDB_VERSION:-v25.4.0}
 
 services:
   haproxy:

@@ -89,7 +89,7 @@ Wait ~10 seconds, then open: **http://localhost:8088**
 
 ## Configuration
 
-**CockroachDB (default: v25.3.3, configurable via CRDB_VERSION)** with:
+**CockroachDB (default: v25.4.0, configurable via CRDB_VERSION)** with:
 - ✅ Vector index enabled (for embeddings)
 - ✅ Buffered writes enabled (performance)
 - ✅ 5 nodes across 3 regions
@@ -177,7 +177,7 @@ docker compose down -v
 ## Technical Details
 
 **Stack:**
-- CockroachDB (default v25.3.3, set via CRDB_VERSION env var)
+- CockroachDB (default v25.4.0, set via CRDB_VERSION env var)
 - HAProxy LTS (load balancer)
 - Toxiproxy 2.9.0 (network partition simulator)
 - Python FastAPI (chaos panel)
