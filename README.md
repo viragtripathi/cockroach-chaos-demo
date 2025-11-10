@@ -6,6 +6,46 @@ Interactive demonstration of CockroachDB's resilience during network partitions.
 
 ![HAProxy Stats](backend/static/haproxy-stats.png)
 
+## Prerequisites
+
+### Docker Users
+Standard Docker Desktop installation works out of the box.
+
+### Podman Users
+Podman requires Docker compatibility to be enabled:
+
+1. **Enable Docker Compatibility in Podman Desktop:**
+   - Open Podman Desktop settings
+   - Enable "Docker Compatibility Mode" (allows Docker CLI commands to work with Podman)
+   - This creates a `docker` symlink to the `podman` CLI
+
+2. **Check if Socket Configuration is Needed:**
+   
+   Most macOS Podman setups create a symlink automatically:
+   ```bash
+   ls -la /var/run/docker.sock
+   # If you see a symlink to Podman socket -> no configuration needed!
+   # Example: /var/run/docker.sock -> /Users/username/.local/share/containers/podman/machine/podman.sock
+   ```
+
+   **Only if the symlink doesn't exist**, create a `.env` file in the project root:
+   
+   **For macOS:**
+   ```bash
+   # Replace with your actual username
+   DOCKER_SOCKET=/Users/yourusername/.local/share/containers/podman/machine/podman.sock
+   ```
+   
+   **For Linux:**
+   ```bash
+   # Replace 502 with your UID from `id -u`
+   DOCKER_SOCKET=/run/user/502/podman/podman.sock
+   ```
+
+   **Why this might be needed:** The chaos backend uses Docker CLI commands to control containers 
+   (network disconnect/connect, container kill/start). If Podman doesn't have the standard 
+   `/var/run/docker.sock` symlink, you need to point to the actual Podman socket location.
+
 ## 🚀 Quick Start
 
 ```bash

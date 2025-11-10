@@ -147,7 +147,10 @@ services:
     ports:
       - "8088:8088"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Docker socket - configurable for Podman compatibility
+      # Default: /var/run/docker.sock (standard Docker)
+      # Podman: Set DOCKER_SOCKET=/run/user/$(id -u)/podman/podman.sock in .env
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:rw
     depends_on:
       - haproxy
       - toxiproxy-east
