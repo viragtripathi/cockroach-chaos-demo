@@ -126,6 +126,12 @@ services:
     entrypoint: ["/bin/sh","-c"]
     command: >
       "until /cockroach/cockroach sql --insecure --host=crdb-e1a:26257 -e 'select 1'; do sleep 1; done &&
+       echo 'Waiting for all regions to be available...' &&
+       until [ $(/cockroach/cockroach sql --insecure --host=crdb-e1a:26257 -e 'SELECT count(*) FROM [SHOW REGIONS FROM CLUSTER]' --format=tsv 2>/dev/null | tail -1) -ge 3 ]; do 
+         echo 'Still waiting for regions...'; 
+         sleep 2; 
+       done &&
+       echo 'All regions ready, running init.sql...' &&
        /cockroach/cockroach sql --insecure --host=crdb-e1a:26257 --file=/init.sql"
 
   # Backend UI + API (serves a minimal dashboard + chaos controls)

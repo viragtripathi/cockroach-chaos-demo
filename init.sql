@@ -17,7 +17,19 @@ CREATE TABLE IF NOT EXISTS defaultdb.demo_transactions (
 );
 
 -- Note: For full multi-region setup, Banko AI app can run:
--- ALTER DATABASE defaultdb SET PRIMARY REGION "us-east-1";
--- ALTER DATABASE defaultdb ADD REGION "us-west-2";
--- ALTER DATABASE defaultdb ADD REGION "us-central-1";
--- ALTER DATABASE defaultdb SET SECONDARY REGION "us-west-2";
+
+-- Set the primary region for the database (replace with a region returned by SHOW REGIONS FROM CLUSTER)
+ALTER DATABASE defaultdb SET PRIMARY REGION "us-east-1";
+
+-- Add additional regions
+ALTER DATABASE defaultdb ADD REGION "us-west-2";
+ALTER DATABASE defaultdb ADD REGION "us-central-1";
+
+-- Add secondary region
+ALTER DATABASE defaultdb SET SECONDARY REGION "us-west-2";
+
+-- Optional: survive an entire region failure (requires 3+ database regions)
+ALTER DATABASE defaultdb SURVIVE REGION FAILURE;
+
+-- Verify database regions & survival goal
+SHOW REGIONS FROM DATABASE defaultdb;
