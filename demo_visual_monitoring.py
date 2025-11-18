@@ -50,6 +50,26 @@ def get_connection():
     except:
         return None
 
+def ensure_demo_table():
+    """Ensure demo_transactions table exists"""
+    try:
+        conn = get_connection()
+        if not conn:
+            return
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS demo_transactions (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+                amount INT NOT NULL
+            )
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except:
+        pass  # Silently fail for monitoring script
+
 def generate_cluster_table():
     """Generate cluster status table"""
     table = Table(title="🪲 CockroachDB Cluster Status", box=box.HEAVY_EDGE)
@@ -259,6 +279,7 @@ def generate_dashboard():
 
 def main():
     """Main monitoring loop"""
+    ensure_demo_table()
     console.clear()
     
     try:

@@ -47,6 +47,27 @@ def get_connection():
                 raise
             time.sleep(1)
 
+def ensure_demo_table():
+    """Ensure demo_transactions table exists"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS demo_transactions (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+                amount INT NOT NULL
+            )
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        if RICH_AVAILABLE:
+            console.print(f"[yellow]Warning: Could not ensure table exists: {e}[/yellow]")
+        else:
+            print(f"Warning: Could not ensure table exists: {e}")
+
 def print_header(title):
     """Print formatted header"""
     if RICH_AVAILABLE:
@@ -84,6 +105,7 @@ def get_cluster_status():
 
 def show_status():
     """Show cluster status and transaction count"""
+    ensure_demo_table()
     print_header("Cluster Status")
     
     nodes, tx_count = get_cluster_status()
@@ -124,6 +146,7 @@ def show_status():
 
 def insert_transactions(count=50):
     """Insert transactions with progress visualization"""
+    ensure_demo_table()
     print_header(f"Inserting {count} Transactions")
     
     conn = get_connection()
@@ -170,6 +193,7 @@ def insert_transactions(count=50):
 
 def show_distribution():
     """Show data distribution across nodes"""
+    ensure_demo_table()
     print_header("Data Distribution Across Nodes")
     
     conn = get_connection()

@@ -12,6 +12,11 @@ RUN apt-get update && \
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py /app/app.py
+COPY gunicorn.conf.py /app/gunicorn.conf.py
 COPY static /app/static
 EXPOSE 8088
-CMD ["uvicorn","app:app","--host","0.0.0.0","--port","8088"]
+
+# Use Gunicorn with Uvicorn workers for production multi-user support
+# Default: 4 workers (handles ~10-20 concurrent users)
+# Override with GUNICORN_WORKERS env var for larger labs
+CMD ["gunicorn", "app:app", "-c", "gunicorn.conf.py"]

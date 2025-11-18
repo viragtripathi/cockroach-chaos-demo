@@ -150,6 +150,9 @@ services:
       DB_PORT: "26257"
       DB_USER: root
       DB_NAME: defaultdb
+      # Multi-user support: default 4 workers (~10-20 concurrent users)
+      # For larger labs, increase: GUNICORN_WORKERS=8 (20-40 users)
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
     ports:
       - "8088:8088"
     volumes:

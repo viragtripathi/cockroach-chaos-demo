@@ -51,6 +51,21 @@ else
     exit 1
 fi
 
+# Ensure demo_transactions table exists
+echo -n "Ensuring demo_transactions table exists... "
+docker exec crdb-e1a ./cockroach sql --insecure -e "
+    CREATE TABLE IF NOT EXISTS demo_transactions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+        amount INT NOT NULL
+    )
+" >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${YELLOW}⚠ Could not create table (may already exist)${NC}"
+fi
+
 # Test replication script
 echo ""
 echo "Testing replication demo script..."
@@ -70,6 +85,17 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ Isolation script works${NC}"
 else
     echo -e "${RED}✗ Isolation script failed${NC}"
+    exit 1
+fi
+
+# Test operations script
+echo ""
+echo "Testing operations demo script..."
+python3 demo_operations.py --changefeed >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ Operations script works${NC}"
+else
+    echo -e "${RED}✗ Operations script failed${NC}"
     exit 1
 fi
 
@@ -105,8 +131,10 @@ echo ""
 echo -e "${GREEN}✓ All tests passed!${NC}"
 echo ""
 echo "You're ready to run the demo! Quick start:"
-echo "  python3 demo_replication.py --all"
-echo "  python3 demo_isolation.py --compare"
-echo "  python3 demo_visual_monitoring.py"
+echo "  python3 demo_replication.py --all           # Replication & fault tolerance"
+echo "  python3 demo_isolation.py --compare         # Isolation levels comparison"
+echo "  python3 demo_operations.py --all            # Operational excellence (NEW!)"
+echo "  python3 demo_visual_monitoring.py           # Live monitoring dashboard"
 echo ""
-echo "See DEMO_SCRIPT.md for full demonstration guide"
+echo "See REPLICATION_DEMO.md for full demonstration guide"
+echo "See TALKING_POINTS.md for comprehensive talking points"
