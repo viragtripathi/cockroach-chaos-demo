@@ -54,7 +54,7 @@ Podman requires Docker compatibility to be enabled:
 
 **Using a different CockroachDB version:**
 ```bash
-CRDB_VERSION=v25.3.0 ./run.sh
+CRDB_VERSION=v25.1.0 ./run.sh
 ```
 
 Wait ~10 seconds, then open: **http://localhost:8088**
@@ -130,8 +130,8 @@ Wait ~10 seconds, then open: **http://localhost:8088**
 ## Configuration
 
 **CockroachDB (default: v25.4.0, configurable via CRDB_VERSION)** with:
-- ✅ Vector index enabled (for embeddings)
-- ✅ Buffered writes enabled (performance)
+- ✅ Vector index support (GA in v25.4.0 - for embeddings)
+- ✅ Buffered writes (GA in v25.4.0 - improved performance)
 - ✅ 5 nodes across 3 regions
 - ✅ Region locations configured
 

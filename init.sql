@@ -5,9 +5,10 @@ UPSERT INTO system.locations ("localityKey", "localityValue", latitude, longitud
   ('region', 'us-west-2', 45.5231, -122.6765),
   ('region', 'us-central-1', 41.2565, -95.9345);
 
--- Enable vector index and buffered writes
-SET CLUSTER SETTING feature.vector_index.enabled = true;
-SET CLUSTER SETTING kv.transaction.write_buffering.enabled = true;
+-- Vector index and buffered writes (GA in v25.4.0+)
+-- For v25.3.x and older, uncomment these lines:
+-- SET CLUSTER SETTING feature.vector_index.enabled = true;
+-- SET CLUSTER SETTING kv.transaction.write_buffering.enabled = true;
 
 -- Create demo transactions table
 CREATE TABLE IF NOT EXISTS defaultdb.demo_transactions (
