@@ -5,8 +5,8 @@ UPSERT INTO system.locations ("localityKey", "localityValue", latitude, longitud
   ('region', 'us-west-2', 45.5231, -122.6765),
   ('region', 'us-central-1', 41.2565, -95.9345);
 
--- Vector index and buffered writes (VI GA in v25.4.0)
--- For v25.3.x and older, uncomment this lines:
+-- Vector index (GA in v25.4.0+)
+-- For v25.3.x and older, uncomment these lines:
 -- SET CLUSTER SETTING feature.vector_index.enabled = true;
 SET CLUSTER SETTING kv.transaction.write_buffering.enabled = true;
 
@@ -17,20 +17,12 @@ CREATE TABLE IF NOT EXISTS defaultdb.demo_transactions (
   amount INT NOT NULL
 );
 
--- Note: For full multi-region setup, Banko AI app can run:
+-- Note: Multi-region database setup
+-- Uncomment these if you need full multi-region features:
 
--- Set the primary region for the database (replace with a region returned by SHOW REGIONS FROM CLUSTER)
 ALTER DATABASE defaultdb SET PRIMARY REGION "us-east-1";
-
--- Add additional regions
 ALTER DATABASE defaultdb ADD REGION "us-west-2";
 ALTER DATABASE defaultdb ADD REGION "us-central-1";
-
--- Add secondary region
 ALTER DATABASE defaultdb SET SECONDARY REGION "us-west-2";
-
--- Optional: survive an entire region failure (requires 3+ database regions)
 ALTER DATABASE defaultdb SURVIVE REGION FAILURE;
-
--- Verify database regions & survival goal
 SHOW REGIONS FROM DATABASE defaultdb;
