@@ -1,5 +1,5 @@
 x-cockroach-image: &cockroach-image
-  cockroachdb/cockroach:${CRDB_VERSION:-v25.4.10}
+  cockroachdb/cockroach:${CRDB_VERSION:-v25.4.13}
 
 services:
   haproxy:

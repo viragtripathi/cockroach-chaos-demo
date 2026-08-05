@@ -268,7 +268,9 @@ def get_db_conn():
             port=DB_PORT,
             user=DB_USER,
             database=DB_NAME,
-            connect_timeout=3
+            connect_timeout=3,
+            # crdb_internal tables are gated behind this on v26.1+
+            options='-c allow_unsafe_internals=on'
         )
     except Exception as e:
         return None
