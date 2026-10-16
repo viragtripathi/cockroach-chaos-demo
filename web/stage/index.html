@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CockroachDB</title>
+  <link rel="icon" href="/static/shared/favicon.ico">
+  <link rel="stylesheet" href="/static/shared/tokens.css">
+  <link rel="stylesheet" href="/static/stage/stage.css">
+</head>
+<body>
+  <div id="frame">
+    <div id="stage">
+      <header class="top">
+        <img class="logo" src="/static/shared/crl-logo.svg" alt="Cockroach Labs">
+        <span class="sep"></span>
+        <h1 id="cluster-name">Connecting…</h1>
+        <span class="eyebrow" id="footprint"></span>
+        <div class="right">
+          <span class="chip chip-goal" id="chip-goal"></span>
+          <span class="chip chip-incident" id="chip-incident" hidden></span>
+          <span class="chip chip-booth" id="chip-booth" hidden></span>
+          <span class="clock" id="clock"></span>
+          <button class="icon control-only" id="drawer-btn" type="button" title="Presenter (P)">☰</button>
+          <button class="icon" id="theme" type="button" title="Theme (T)">☀</button>
+        </div>
+      </header>
+
+      <section class="box kpis" id="kpis">
+        <div class="kpi"><div class="lbl">Live nodes</div><div class="val" id="k-nodes">–</div><div class="sub" id="k-nodes-sub"></div></div>
+        <div class="kpi"><div class="lbl">Unavailable ranges</div><div class="val" id="k-unavail">–</div><div class="sub" id="k-unavail-sub"></div></div>
+        <div class="kpi"><div class="lbl">Transactions / s</div><div class="val" id="k-tps">–</div><div class="sub" id="k-tps-sub">all clients</div></div>
+        <div class="kpi"><div class="lbl">p99 latency</div><div class="val" id="k-p99">–</div><div class="sub" id="k-p99-sub">SQL service latency</div></div>
+        <div class="kpi"><div class="lbl">Money lost</div><div class="val" id="k-money">–</div><div class="sub" id="k-money-sub"></div></div>
+        <div class="kpi"><div class="lbl">Recovered in</div><div class="val" id="k-recovery">–</div><div class="sub" id="k-recovery-sub"></div></div>
+      </section>
+
+      <main id="regions"></main>
+
+      <section class="box chart-box" id="chart-box">
+        <div class="eyebrow">Transactions / s by gateway region · last 2 min</div>
+        <div class="chart-legend" id="legend"></div>
+        <canvas id="chart"></canvas>
+        <div class="chart-empty" id="chart-empty">Waiting for traffic</div>
+      </section>
+
+      <aside class="box side" id="side">
+        <div class="booth-strip" id="booth-strip" hidden>
+          <div><div class="lbl">Nodes crashed</div><div class="big" id="b-nodes">0</div></div>
+          <div><div class="lbl">Regions taken down</div><div class="big" id="b-regions">0</div></div>
+          <div><div class="lbl">Money lost</div><div class="big good" id="b-money">$0</div></div>
+        </div>
+        <div class="eyebrow">Live events</div>
+        <div class="events" id="events"></div>
+      </aside>
+
+      <section class="box scenario" id="scenario" hidden>
+        <div class="sc-head">
+          <span class="eyebrow" id="sc-tier"></span>
+          <span class="sc-title" id="sc-title"></span>
+          <span class="sc-step" id="sc-step"></span>
+        </div>
+        <div class="sc-caption" id="sc-caption"></div>
+        <div class="sc-observe" id="sc-observe"></div>
+        <div class="sc-result" id="sc-result"></div>
+        <div class="sc-actions control-only">
+          <button class="btn prim" id="sc-next" type="button">Next ▸</button>
+          <button class="btn" id="sc-stop" type="button">End</button>
+        </div>
+      </section>
+
+      <div class="toast-op" id="op-toast" hidden><span class="spinner"></span><span id="op-toast-text"></span></div>
+
+      <section class="provisioning" id="provisioning" hidden>
+        <div class="eyebrow" id="prov-title">Provisioning</div>
+        <h2 id="prov-name"></h2>
+        <ol id="steps"></ol>
+        <p class="error" id="op-error" hidden></p>
+      </section>
+
+      <div class="menu" id="menu" hidden></div>
+      <div class="modal-wrap" id="confirm" hidden>
+        <div class="modal">
+          <div class="eyebrow">Beyond the survival goal</div>
+          <p id="confirm-text"></p>
+          <div class="modal-actions">
+            <button class="btn" id="confirm-cancel" type="button">Cancel</button>
+            <button class="btn danger" id="confirm-ok" type="button">Do it anyway</button>
+          </div>
+        </div>
+      </div>
+      <div class="toast" id="toast" hidden></div>
+      <canvas id="confetti" width="1920" height="1080"></canvas>
+      <div class="celebrate" id="celebrate" hidden><span class="tick">✓</span><span id="celebrate-text">Fully recovered</span></div>
+    </div>
+  </div>
+  <div class="drawer" id="drawer" hidden><iframe id="drawer-frame" title="Presenter"></iframe></div>
+  <script type="module" src="/static/stage/stage.js"></script>
+</body>
+</html>

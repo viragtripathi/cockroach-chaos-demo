@@ -1,0 +1,9 @@
+# Three Google Cloud regions, two nodes each.
+display_name: Global Payments
+cluster_id: global-payments
+survival_goal: auto
+latency: realistic
+regions:
+  - { name: us-east1, provider: gcp, nodes: 2, primary: true }
+  - { name: us-central1, provider: gcp, nodes: 2, secondary: true }
+  - { name: europe-west1, provider: gcp, nodes: 2 }

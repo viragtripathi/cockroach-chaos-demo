@@ -1,0 +1,10 @@
+# Three AWS regions, two nodes each (balanced for a laptop). Survives a full region outage.
+# Add nodes from the stage (+ Node) or the presenter when the machine has room.
+display_name: Global Payments
+cluster_id: global-payments
+survival_goal: auto
+latency: realistic
+regions:
+  - { name: us-east-1, provider: aws, nodes: 2, primary: true }
+  - { name: us-west-2, provider: aws, nodes: 2, secondary: true }
+  - { name: eu-west-1, provider: aws, nodes: 2 }

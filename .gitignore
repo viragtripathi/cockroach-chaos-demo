@@ -209,3 +209,11 @@ __marimo__/
 # OS specific files
 .DS_Store
 Thumbs.db
+# Brainstorming companion (mockups, prototype explainers, exported videos)
+.superpowers/
+
+# Exported explainer videos (tools/export-explainer.mjs)
+*.mp4
+
+# Proof run reports (./run.sh prove)
+proof/
