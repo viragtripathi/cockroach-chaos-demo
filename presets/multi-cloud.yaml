@@ -1,0 +1,9 @@
+# One region on each of AWS, Google Cloud and Azure.
+display_name: Global Payments
+cluster_id: global-payments
+survival_goal: auto
+latency: realistic
+regions:
+  - { name: us-east-1, provider: aws, nodes: 2, primary: true }
+  - { name: us-central1, provider: gcp, nodes: 2, secondary: true }
+  - { name: westus2, provider: azure, nodes: 2 }

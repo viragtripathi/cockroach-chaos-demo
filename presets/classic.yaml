@@ -1,0 +1,9 @@
+# The original demo shape (2 + 2 + 1 nodes) with real AWS region names.
+display_name: Global Payments
+cluster_id: global-payments
+survival_goal: auto
+latency: realistic
+regions:
+  - { name: us-east-1, provider: aws, nodes: 2, primary: true }
+  - { name: us-west-2, provider: aws, nodes: 2, secondary: true }
+  - { name: us-east-2, provider: aws, nodes: 1 }

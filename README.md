@@ -1,241 +1,262 @@
-# 🪲 CockroachDB Multi-Region Chaos Demo
+# CockroachDB Multi-Region Chaos Demo
 
-Interactive demonstration of CockroachDB's resilience during network partitions.
+A live, cloud-looking CockroachDB cluster on your laptop. A control plane builds the cluster from a
+**preset** with whatever region names you need (AWS, Google Cloud, Azure, IBM, OCI, multi-cloud or your own),
+puts a global load balancer in front of it, and gives you:
 
-![CockroachDB Chaos Demo](backend/static/cockroachdb-chaos-demo.png)
+- a **stage** for big screens and booths: live regions and nodes, traffic by region, recovery time, money lost
+- a **presenter console** (laptop, phone, or a drawer on the stage) for every control
+- **chaos**: crash, planned stop, partition, brownout and isolate nodes, zones or whole regions, with
+  realistic latency between regions
+- **elasticity**: add or decommission nodes, add or remove regions, switch survival goals, all live
+- a built-in **Payments** workload with a $10,000,000 invariant, plus Banko AI Assistant support
+- eleven guided **scenarios**, a **booth mode** with hardware triggers, and a **motion explainer**
 
-![HAProxy Stats](backend/static/haproxy-stats.png)
+![The stage during a primary-region outage: us-east-1 down, 4 of 6 nodes live, no unavailable ranges, $0 lost, payments recovered in 6.8 s](docs/images/stage-region-outage.png)
 
-## Prerequisites
+*The stage during a primary-region outage under load: us-east-1 is down, every range is still available, no money
+is lost, and payments are back to normal in 6.8 s, with us-east-1's customers served from us-west-2 until it heals.*
 
-### Docker Users
-Standard Docker Desktop installation works out of the box.
+Everything runs locally; the stage never shows that. Nothing is sent anywhere.
 
-### Podman Users
-Podman requires Docker compatibility to be enabled:
+## Quick start
 
-1. **Enable Docker Compatibility in Podman Desktop:**
-   - Open Podman Desktop settings
-   - Enable "Docker Compatibility Mode" (allows Docker CLI commands to work with Podman)
-   - This creates a `docker` symlink to the `podman` CLI
+    ./run.sh up                 # default preset: aws (3 regions × 2 nodes)
+    ./run.sh up --preset gcp    # rebuild with Google Cloud regions
+    ./run.sh status
+    ./run.sh down
 
-2. **Check if Socket Configuration is Needed:**
-   
-   Most macOS Podman setups create a symlink automatically:
-   ```bash
-   ls -la /var/run/docker.sock
-   # If you see a symlink to Podman socket -> no configuration needed!
-   # Example: /var/run/docker.sock -> /Users/username/.local/share/containers/podman/machine/podman.sock
-   ```
+| What | URL |
+|---|---|
+| Stage (put this on the big screen) | http://localhost:8088 |
+| Presenter console | http://localhost:8088/presenter |
+| Explainer | http://localhost:8088/explainer/chaos, `/explainer/playlist` |
+| SQL (Banko, psql, any Postgres client) | `postgresql://root@localhost:26257/defaultdb?sslmode=disable` |
+| DB Console (stays up when nodes die) | http://localhost:8080 |
+| Load balancer stats | http://localhost:8404/stats |
 
-   **Only if the symlink doesn't exist**, create a `.env` file in the project root:
-   
-   **For macOS:**
-   ```bash
-   # Replace with your actual username
-   DOCKER_SOCKET=/Users/yourusername/.local/share/containers/podman/machine/podman.sock
-   ```
-   
-   **For Linux:**
-   ```bash
-   # Replace 502 with your UID from `id -u`
-   DOCKER_SOCKET=/run/user/502/podman/podman.sock
-   ```
+Needs Docker Desktop or Podman with compose, about 8 GB of memory for the default 6 nodes given to the
+Docker/Podman VM (each node settles around 1 GiB; add nodes from the stage when there's room, and the `small`
+preset runs in 8 GB laptops), and ports 26257, 8080, 8088 and 8404.
+`./run.sh up` checks all of that first.
 
-   **Why this might be needed:** The chaos backend uses Docker CLI commands to control containers 
-   (network disconnect/connect, container kill/start). If Podman doesn't have the standard 
-   `/var/run/docker.sock` symlink, you need to point to the actual Podman socket location.
+## The stage
 
-## 🚀 Quick Start
+Region columns with every node as a tile (replicas, leases, traffic), a KPI strip, a live traffic chart by
+gateway region with failure and recovery markers, an event ticker, and the scenario card. It is designed at
+1920×1080 and scales to any screen. Click a node for its menu; region buttons sit under each region.
 
-```bash
-./run.sh
+![The stage in the light theme: a healthy cluster, traffic by gateway region, and Payments latency by home region under the chart](docs/images/stage-light.png)
+
+| Key | Does |
+|---|---|
+| `1`–`9` | fire the mapped trigger (booth hardware, see below) |
+| `P` | presenter drawer (close with ✕, `Esc` or `P`) |
+| `N` or `→` | next scenario step |
+| `T` | dark / light theme (also `?theme=light`) |
+| `F` | fullscreen |
+| `E` | explainer playlist; any key returns |
+| `C` | preview the recovery celebration (it plays by itself when every node is back; `?confetti=0` turns the confetti off) |
+
+If `CONTROL_TOKEN` is set, the stage is read-only until you open `/presenter?token=…` once in that browser.
+
+## Presenter console
+
+Tabs: **Cluster** (presets, custom preset editor, latency, survival goal, primary region, add node/region),
+**Chaos** (any target, any action, brownout settings, decommission, remove region), **Workload**,
+**Scenarios**, **Booth** (auto-heal, counters, trigger map) and **System** (the real endpoints and logs).
+It works on a phone, so you can drive the demo from your pocket.
+
+![Presenter console, Workload tab: Payments at its target rate, latency per home region, and no retries, errors or failed transfers](docs/images/presenter-workload.png)
+
+## Deployment models
+
+**Multi-region** (default) spreads the preset's regions across the map: it survives losing a whole region, can span
+clouds, and shows locality features like REGIONAL BY ROW and follower reads.
+
+**Single region** is for customers who run in one region: the preset's primary region on its own, with one node per
+availability zone (3 to start, add more with **+ Node**). It survives losing a node or a whole zone, and scales the
+same way. The stage shows a zone-outage button per zone, and the **Survive a zone outage** scenario is its headline.
+
+    ./run.sh up --model single-region                  # aws: us-east-1 across 3 zones
+    ./run.sh up --preset azure --model single-region   # eastus across 3 zones
+
+Set `DEPLOYMENT_MODEL` in `.env` to change the default, or switch from the presenter (Cluster → Presets → Deployment
+model, then rebuild). Adding a region to a single-region cluster turns it multi-region.
+
+## Presets and your own regions
+
+| Preset | Regions (nodes) | Survival goal |
+|---|---|---|
+| `aws` | us-east-1 (2), us-west-2 (2), eu-west-1 (2) | region |
+| `gcp` | us-east1 (2), us-central1 (2), europe-west1 (2) | region |
+| `azure` | eastus (2), westus2 (2), westeurope (2) | region |
+| `ibm` | us-south (2), us-east (2), eu-de (2) | region |
+| `multi-cloud` | aws us-east-1 (2), gcp us-central1 (2), azure westus2 (2) | region |
+| `classic` | us-east-1 (2), us-west-2 (2), us-east-2 (1) | region |
+| `small` | us-east-1, us-west-2, eu-west-1 (1 each), for 8 GB laptops | none (plain 3× replication) |
+
+Make your own in the presenter console (Cluster → Custom preset), or copy a file in `presets/` to
+`presets/custom/<name>.yaml`:
+
+```yaml
+display_name: Acme Bank        # shown on the stage and in the explainer: use your customer's name
+cluster_id: acme-bank
+survival_goal: auto            # auto | zone | region | none
+latency: realistic             # realistic | off | a multiplier such as 0.5
+regions:
+  - { name: eastus, provider: azure, nodes: 3, primary: true }
+  - { name: westus2, provider: azure, nodes: 3, secondary: true }
+  - { name: mars-north-1, provider: custom, nodes: 3, label: Olympus Mons, location: [18.6, -133.8] }
 ```
 
-**Using a different CockroachDB version:**
-```bash
-CRDB_VERSION=v25.1.0 ./run.sh
-```
+Real zone names, cities and map coordinates come from `catalog/regions.yaml`; unknown regions work too.
+Latency between regions follows their distance. Up to 15 nodes by default (`MAX_NODES`).
 
-Wait ~10 seconds, then open: **http://localhost:8088**
+## Chaos and elasticity
 
-## Demo Flow
+| Target | Actions |
+|---|---|
+| Node | crash, planned stop, partition, brownout (+700 ms ±200, 2% loss by default), recover, decommission |
+| Zone | zone outage |
+| Region | outage, partition, isolate (cut off from other regions while clients still connect), brownout, recover, remove |
+| Cluster | recover everything, add a node or region, survival goal, primary region, latency |
 
-### Quick Demo (30 seconds)
+Before an action that would exceed the survival goal (for example a second region outage under REGION
+survival), the panel shows what would become unavailable and asks you to confirm.
 
-1. **All regions green** → click "Recover" on each if needed
-2. **Click "🚀 Simulate Transactions"** → watch counter increment  
-3. **Click "⚡ Partition" on us-east-1** → region turns red
-4. **Click "🚀 Simulate Transactions" again** → still works! ✨
-5. **Check admin console** → http://localhost:8080 → nodes marked as SUSPECT/DEAD
-6. **Check HAProxy stats** → http://localhost:8404/stats → partitioned nodes show RED
-7. **Click "✓ Recover"** → nodes rejoin cluster and turn green
+## Payments workload
 
-### Chaos Scenarios Explained
+Transfers between 10,000 accounts (UUID keys) holding $10,000,000 in total, in the separate `chaos` database
+so it never touches Banko's data. 48 workers at 250 transfers/s by default.
 
-**🟢 Recover:** Restores region connectivity and restarts any killed nodes.
+On a multi-region cluster every account and every worker lives in a region. `accounts` and `transfers` are
+`REGIONAL BY ROW` with the region in the primary key, the accounts are spread evenly over the regions, and each
+worker connects straight to a node in its own region: every statement of a transfer is local and only the commit
+crosses a region, the way a real regional deployment works. One transfer in ten (the cross-region share, adjustable
+in the presenter) pays an account in another region on purpose and costs one more round trip. When a region goes
+down, its workers reconnect to the nearest live region, keep paying their own accounts, and come home when it heals.
+The stage shows p50 latency per home region under the traffic chart. With realistic latency on the aws preset, a
+single write from the home gateway measured 63 ms in us-east-1 and us-west-2 and 97 ms in eu-west-1, against 180 to
+240 ms for the same write from another region's gateway, which is what the old layout paid on two thirds of its
+transfers. A cluster whose `chaos` database is not multi-region (survival goal none, as on the `small` preset)
+keeps plain tables through the load balancer.
 
-**🟡 Brownout (Degraded Performance):**
-- Adds configurable network latency (default 700ms) via Toxiproxy
-- Simulates slow/degraded network connections
-- Great for testing timeout handling and query performance under latency
-- CockroachDB continues operating but with slower response times
+Retries follow CockroachDB best practice (`controlplane/controlplane/retry.py`, matching cockroachdb-jdbc-wrapper,
+langchain-cockroachdb and Banko): `40001` serialization failures, `40003` ambiguous results, `08xxx` connection
+errors, `57P01` admin shutdown and statement timeouts, plus the usual message patterns for errors without a code,
+with exponential backoff and jitter. Because `40003` and dropped connections can mean the transaction already
+committed, every transfer writes its own UUID in the same transaction: a retry either applies it or hits the
+duplicate key and knows it already landed, so a transfer is never applied twice.
 
-**🟠 Partition (Network Partition):**
-- **True network partition** using Docker network disconnect
-- Nodes become completely isolated from the cluster
-- CockroachDB will mark them as SUSPECT (after ~5 seconds) then DEAD (after ~9 seconds)
-- HAProxy detects unhealthy nodes and reroutes traffic automatically
-- Nodes stay running but cannot communicate - check admin console to see them go SUSPECT/DEAD
-- **Key Demo Point:** This shows CockroachDB's consensus-based resilience during network splits
+One more lesson baked in: while a range has lost quorum (for example a primary-region outage under ZONE survival),
+CockroachDB's `COMMIT` ignores `statement_timeout`, `transaction_timeout` and cancel requests. Each transfer attempt
+therefore has a 10-second client-side limit that closes the connection, after which the idempotent retry takes over. The stage shows money lost (always $0) and **recovery time**: from the failure to the first
+2-second window back at 80% of normal throughput. Transactions/s and p99 on the stage come from the cluster
+itself, so Banko or any other client counts too.
 
-**🔴 Kill (Abrupt Node Failure):**
-- Uses `docker kill -s SIGKILL` (like kill -9)
-- Simulates catastrophic crash/hardware failure (not graceful shutdown)
-- Nodes are terminated immediately without cleanup
-- CockroachDB cluster continues operating on remaining nodes
-- HAProxy immediately marks dead nodes as DOWN and reroutes
-- **Key Demo Point:** Shows resilience against sudden node crashes
+## Scenarios
 
-## Architecture
+Start one from the presenter console; the stage shows a guided card and you advance with **Next** or `N`.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│              HAProxy (localhost:26257)                  │
-│           Routes SQL to healthy regions                 │
-└───────────┬──────────────┬──────────────┬───────────────┘
-            │              │              │
-    ┌───────▼──────┐ ┌─────▼──────┐ ┌────▼──────┐
-    │ Toxiproxy    │ │ Toxiproxy  │ │ Toxiproxy │
-    │  us-east-1   │ │ us-west-2  │ │us-central │
-    │  (network)   │ │  (network) │ │ (network) │
-    └───────┬──────┘ └─────┬──────┘ └────┬──────┘
-            │              │              │
-    ┌───────▼──────┐ ┌─────▼──────┐ ┌────▼──────┐
-    │ 2 CockroachDB│ │2 CockroachDB│ │1 CockroachDB
-    │    Nodes     │ │   Nodes    │ │   Node    │
-    └──────────────┘ └────────────┘ └───────────┘
-              ╲           |           ╱
-               ╲          |          ╱
-                  CockroachDB Cluster
-              (nodes communicate directly)
-```
+| Tier 1: resilience and multi-region | Tier 2: transactions and operations |
+|---|---|
+| Survive a region outage | Isolation levels: real write skew |
+| ZONE vs REGION survival | Online schema change under load |
+| Elastic scale | Changefeeds that survive failure |
+| REGIONAL BY ROW (latency heatmap) | Split-brain test |
+| Follower reads | Time travel (undo an accidental DELETE) |
+| GLOBAL tables | |
 
-**What happens during chaos:**
-- **Partition:** Nodes isolated via Docker network disconnect → marked SUSPECT/DEAD by CockroachDB
-- **Kill:** Nodes terminated with SIGKILL → immediate failure, no graceful shutdown
-- **Toxiproxy:** Used for Brownout (latency injection) only, not for network partition
-- ✅ HAProxy automatically detects unhealthy backends and routes to healthy regions
+Scenarios check their requirements (for example, 3 regions and latency on) and clean up their tables when you end them.
+ZONE vs REGION survival needs 3 nodes in the primary region: on the 6-node presets, add one with **+ Node** first.
 
-## Configuration
+## Booth mode
 
-**CockroachDB (default: v25.4.10, configurable via CRDB_VERSION)** with:
-- ✅ Vector index support (GA in v25.4.0 - for embeddings)
-- ✅ 5 nodes across 3 regions
-- ✅ Region locations configured
+Presenter → Booth. Visitors can never break the cluster: random targets only pick victims the survival goal
+tolerates, and everything recovers automatically after a quiet period (45 s by default, with a countdown on
+stage). Counters show nodes crashed and regions taken down. Hardware: see
+[`docs/hardware-triggers.md`](docs/hardware-triggers.md). Run-of-show ideas: [`docs/presenting.md`](docs/presenting.md).
 
-**Database:** `defaultdb` (ready to use)
+## Explainer
 
-**Connection String:**
-```
-postgresql://root@localhost:26257/defaultdb?sslmode=disable
-```
+A motion explainer in the same visual style: **chaos** (2:13, how the cluster survives). When served by the
+panel it uses your preset's regions, cities and name. `?theme=light`, `?loop=1`, chapter keys and scrubbing work.
+The playlist (`/explainer/playlist`, or `E` on the stage) loops every explainer the install has. Export an MP4
+(Node ≥ 22, Chrome, ffmpeg):
 
-## Using with [Banko AI](https://github.com/cockroachlabs-field/banko-ai-assistant-rag-demo)
+    node tools/export-explainer.mjs --name chaos --theme dark --out chaos-dark.mp4
 
-Point your [Banko AI](https://github.com/cockroachlabs-field/banko-ai-assistant-rag-demo) app to the connection string above. Your app will:
-- Create its own tables automatically
-- Handle brief connection errors during failover
-- Continue operating when regions are "killed"
+![The chaos explainer's gray-failure chapter: a brownout slows one node, and Raft commits with the fastest majority](docs/images/explainer-gray-failure.png)
 
-**Expected behavior during chaos events:**
+## Banko AI Assistant
 
-Partition:
-- ⚠️ Nodes marked SUSPECT (~5s) then DEAD (~9s) in admin console
-- ✅ HAProxy reroutes traffic to healthy regions within seconds
-- ✅ All committed data remains available
-- ✅ Transactions continue on available nodes
+Point Banko at the SQL URL above. This repo configures `defaultdb` as a multi-region database (Banko detects the
+regions), and adding a region live adds it to `defaultdb` too. Realistic latency slows Banko's loader; switch it off
+in the presenter console if needed. Rebuilding with another preset wipes `defaultdb`: restart Banko afterwards.
+A containerized Banko can join the `crdb-chaos` network and use `postgresql://root@haproxy:26257/defaultdb?sslmode=disable`.
 
-Kill:
-- ⚠️ Immediate node termination (SIGKILL)
-- ✅ HAProxy detects failure and reroutes instantly
-- ✅ Cluster continues with remaining nodes
-- ✅ No data loss (replicas on other nodes)
+## Configuration (`.env`)
 
-Brownout:
-- ⚠️ Queries slow down (configurable latency)
-- ✅ All operations eventually complete
-- ✅ Tests application timeout handling
+See `.env.example`: `PRESET`, `CRDB_VERSION`, `PANEL_PORT`, `CHAOS_SUBNET` (if 10.77.0.0/16 collides with a VPN),
+`CRDB_LICENSE`/`CRDB_ORG`, `DOCKER_SOCKET`, and the optional `CONTROL_TOKEN` and `TRIGGER_TOKEN`. **Set a
+`CONTROL_TOKEN` whenever the panel is reachable from shared Wi-Fi.**
 
-See http://localhost:8080 to monitor node status and liveness during chaos events.
+**Set `CRDB_LICENSE` for anything longer than a week.** CockroachDB throttles a multi-node cluster without a license
+key to 5 open transactions 7 days after it was built, and the Payments workload then fails. Free and 30-day trial
+keys come from the CockroachDB Cloud Console (Organization › Enterprise Licenses). The panel applies the key when it
+builds a cluster and every time it starts, so a key added later only needs `./run.sh up`, not a rebuild.
 
-## Why Toxiproxy?
+## Podman
 
-Toxiproxy is used **only for Brownout scenarios** to inject configurable network latency. For true network partitions, we use Docker network disconnect to properly isolate nodes, which is the recommended approach per [CockroachDB documentation](https://www.cockroachlabs.com/docs/stable/cluster-setup-troubleshooting#network-partition).
+Rootless Podman works (it is the main test platform). If `/var/run/docker.sock` isn't linked to the Podman
+socket, set `DOCKER_SOCKET` in `.env`.
 
-This approach ensures:
-- Network partitions properly trigger CockroachDB's consensus mechanism
-- Nodes are marked as SUSPECT then DEAD (observable in admin console)
-- HAProxy health checks accurately reflect node availability
-- Brownout scenarios test application timeout handling
+## Upgrading from the previous version
 
-## Additional Dashboards
-
-- **Chaos Panel:** http://localhost:8088
-- **CockroachDB Console:** 
-  - http://localhost:8080 (crdb-e1a - us-east-1a)
-  - http://localhost:8081 (crdb-e1b - us-east-1b)
-  - http://localhost:8082 (crdb-w2a - us-west-2a)
-  - http://localhost:8083 (crdb-w2b - us-west-2b)
-  - http://localhost:8084 (crdb-c1 - us-central-1a)
-- **HAProxy Stats:** http://localhost:8404/stats
-
-**Note:** Each node serves its own admin console. If you kill crdb-e1a, use port 8081 or 8082 to access the console from a different node!
+The old stack (`crdb-e1a`, toxiproxy, `chaos-backend`) holds the same ports. `./run.sh up` detects it and asks you
+to run `./run.sh down --legacy`. If your `.env` pins an old `CRDB_VERSION`, remove that line.
 
 ## Troubleshooting
 
-**All regions show UNREACHABLE:**
-- Wait 10 seconds for initialization
-- Click "Recover" on each region
+- **The stage looks old** after an upgrade: hard-refresh (Cmd/Ctrl+Shift+R).
+- **Transfers fail with `No license installed. The maximum number of concurrently open transactions has been
+  reached`**: the cluster is more than 7 days old and has no license key, so CockroachDB allows only 5 open
+  transactions and the 48 Payments workers need more. Add `CRDB_LICENSE` to `.env` and run `./run.sh up`: the panel
+  applies the key to the running cluster.
+- **Provisioning failed**: the stage and `./run.sh status` show the step and the error; `./run.sh reset` starts clean.
+- **Latency or brownout does nothing**: the presenter's System tab and the control plane log
+  (`docker logs crdb-chaos-control-plane`) report network shaping failures.
+- **"Telemetry delayed"** on stage means the cluster is unreachable right now, not that values are zero.
+- **Several nodes stop at once with `clock synchronization error`** after the laptop slept: all nodes share the
+  VM's clock, which falls behind while the Mac sleeps and is then stepped forward by minutes; CockroachDB stops
+  nodes on purpose when it sees that. The control plane restarts nodes that stopped on a fatal error within a few
+  seconds (you'll see "restarted after it stopped on a fatal error" in the event ticker). To avoid it during a
+  demo, keep the Mac plugged in and awake (`caffeinate -s`, lid open): Caffeine-style apps don't stop lid-closed,
+  maintenance or thermal sleep.
+- **Nodes die with `disk stall detected` or keep flapping**: the laptop is overloaded, not the disk full. Check
+  `podman machine ssh -- top` (or Docker Desktop's resource view): a load average far above the CPU count means CPU
+  starvation. Stop other database containers you don't need, give the VM enough memory, and prune old images
+  (`podman image prune -a`, then `podman machine ssh -- sudo fstrim -av` to hand the space back to macOS). Clusters
+  built by this version cap each node's Go heap at 1 GiB (`node_memory.go` in a preset); older clusters need one
+  rebuild to pick that up.
 
-**Connection errors in app:**
-- Expected during failover (1-2 seconds)
-- Check your app has retry logic
-- Verify HAProxy routing: http://localhost:8404/stats
+## Proof run
 
-**Admin console shows nodes down:**
-- This shouldn't happen - nodes stay alive
-- Check docker containers: `docker ps`
+Before an event, prove everything still works on this machine:
 
-## Stop Demo
+    ./run.sh prove            # every feature, about an hour (rebuilds the cluster several times)
+    ./run.sh prove --quick    # skips the long parts (guided scenarios, tokens, video export)
 
-```bash
-docker compose down -v
-```
+It drives every feature against the live stack (both deployment models, custom region names, every chaos action,
+elasticity, payments and retries, metrics, scenarios, booth mode and triggers, tokens, the supervisor, the stage and
+presenter UI, the explainer) and writes `proof/index.html`: pass/fail per feature with the evidence (measured round
+trips, recovery times, SQL checks, screenshots). It needs Node.js 22+ and Chrome for the UI checks, and ends with the
+cluster back on the default preset.
 
-## Technical Details
+## Development
 
-**Stack:**
-- CockroachDB (default v25.4.10, set via CRDB_VERSION env var)
-- HAProxy LTS (load balancer)
-- Toxiproxy 2.9.0 (network partition simulator)
-- Python FastAPI (chaos panel)
+    ./run.sh test                              # unit tests (creates .venv on first run)
+    CHAOS_INTEGRATION=1 .venv/bin/pytest tests/integration -m integration -v   # uses and rebuilds the local cluster
 
-**Security Note:** Insecure mode for demos only. Production requires certificates.
-
-## Optional: Multi-Region Database Setup
-
-For advanced testing, configure defaultdb as multi-region:
-
-```sql
-ALTER DATABASE defaultdb SET PRIMARY REGION "us-east-1";
-ALTER DATABASE defaultdb ADD REGION "us-west-2";
-ALTER DATABASE defaultdb ADD REGION "us-central-1";
-ALTER DATABASE defaultdb SET SECONDARY REGION "us-west-2";
-```
-
-This enables regional table placement, follower reads, and lower latency.
-
----
-
-**🪲 Survive anything. Run anywhere.**
+**Security note:** the cluster runs in insecure mode. For demos only.

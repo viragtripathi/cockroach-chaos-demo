@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CockroachDB</title>
+  <link rel="icon" href="/static/shared/favicon.ico">
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+    #catch { position: fixed; inset: 0; cursor: none; }
+  </style>
+</head>
+<body>
+  <iframe id="player" title="Explainer"></iframe>
+  <div id="catch" title="Any key or click returns"></div>
+  <script>
+    // Attract loop for booths: alternate the two explainers; any key, click or tap returns to the stage.
+    const params = new URLSearchParams(location.search);
+    const back = params.get('return') || '/';
+    const theme = params.get('theme') || localStorage.getItem('crdb-stage-theme') || 'dark';
+    const voice = params.get('voice') || localStorage.getItem('crdb-explainer-voice') || 'off';  // f | m | off
+    let playlist = [['chaos', 134]];  // replaced by whichever explainers this install has
+    let i = 0;
+    function play() {
+      const [name, seconds] = playlist[i % playlist.length];
+      document.getElementById('player').src = `/explainer/${name}?theme=${theme}&kiosk=1&voice=${voice}`;
+      i += 1;
+      // switch when the player says it ended (voiced runs are longer); the timer is only a fallback
+      clearTimeout(play.timer);
+      play.timer = setTimeout(play, (seconds + 30) * 1000);
+    }
+    addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.type === 'crdb-explainer-ended') { clearTimeout(play.timer); play(); } });
+    const leave = () => { location.href = back; };
+    addEventListener('keydown', leave);
+    document.getElementById('catch').addEventListener('pointerdown', leave);
+    fetch('/api/explainers').then((r) => r.json()).then((list) => {
+      if (list.length) playlist = list.map((e) => [e.name, e.seconds + 1]);
+    }).catch(() => {}).finally(play);
+  </script>
+</body>
+</html>

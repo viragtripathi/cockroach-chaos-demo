@@ -1,0 +1,55 @@
+/* Continuum brand tokens (cockroachlabs.com, September 2026). Degraded/failed colors are off-palette on purpose. */
+@font-face { font-family: "Geist"; src: url("/static/shared/fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("/static/shared/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+
+:root {
+  --bg: #000000;
+  --fg: #ffffff;
+  --muted: #888884;
+  --line: #232323;
+  --panel: #070707;
+  --healthy: #aede54;
+  --healthy-line: #aede54;
+  --info: #60ecff;
+  --brand: #9059ff;
+  --brand-text: #c8acff;
+  --degraded: #ffb547;
+  --failed: #ff4d5e;
+  --taupe: #e5e4dc;
+  --font: "Geist", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+}
+
+[data-theme=light] {
+  --bg: #f9f8f3;
+  --fg: #0b0b0b;
+  --muted: #5f5f5a;
+  --line: #e2e1d8;
+  --panel: #ffffff;
+  --healthy: #aede54;
+  --healthy-line: #43541f;
+  --info: #144f6b;
+  --brand: #7a3ff0;
+  --brand-text: #502482;
+  --degraded: #b86e00;
+  --failed: #d42a41;
+  --taupe: #33332f;
+}
+
+/* Button feedback shared by the stage and the presenter: press, working, done, failed. */
+.btn, .seg button, .menu button, .icon, .close { transition: transform .08s ease, filter .15s ease, box-shadow .25s ease, opacity .15s; }
+.btn:active, .seg button:active, .menu button:active, .icon:active, .close:active { transform: scale(.94); filter: brightness(1.25); }
+.btn.working, .seg button.working { pointer-events: none; opacity: .75; position: relative; padding-right: 30px; }
+.btn.working::after, .seg button.working::after { content: ""; position: absolute; right: 10px; top: 50%; width: 11px; height: 11px; margin-top: -6px; border-radius: 50%; border: 2px solid currentColor; border-top-color: transparent; animation: btn-spin .7s linear infinite; }
+.btn.done, .seg button.done { box-shadow: 0 0 0 3px color-mix(in srgb, var(--healthy) 70%, transparent), 0 0 24px color-mix(in srgb, var(--healthy) 45%, transparent); }
+.btn.failed, .seg button.failed { box-shadow: 0 0 0 3px color-mix(in srgb, var(--failed) 70%, transparent); animation: btn-shake .35s ease; }
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+@keyframes btn-shake { 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-2px); } }
+@media (prefers-reduced-motion: reduce) { .btn.failed, .seg button.failed { animation: none; } }
+
+/* Hover tooltips (shared/tips.js): plain-language explanations of anything not obvious. */
+.tooltip { position: absolute; z-index: 1000; max-width: 380px; padding: 12px 16px; border-radius: 12px; pointer-events: none;
+  background: var(--panel); color: var(--fg); border: 1px solid color-mix(in srgb, var(--brand) 55%, transparent);
+  box-shadow: 0 18px 50px rgba(0,0,0,.45); font-family: var(--font); font-size: 14px; font-weight: 400; line-height: 1.45;
+  letter-spacing: 0; text-transform: none; white-space: normal; }
+.tooltip[hidden] { display: none; }

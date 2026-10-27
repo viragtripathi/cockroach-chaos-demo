@@ -1,165 +1,61 @@
-x-cockroach-image: &cockroach-image
-  cockroachdb/cockroach:${CRDB_VERSION:-v25.4.14}
+# Two fixed services. The control plane creates the CockroachDB nodes itself from a preset (see presets/).
+name: crdb-chaos
 
 services:
   haproxy:
-    image: haproxy:lts
+    image: docker.io/library/haproxy:lts
     container_name: haproxy
+    restart: unless-stopped
+    # Wait for the control plane's first config, then hand PID 1 to HAProxy so SIGUSR2 reloads it.
+    entrypoint: ["/bin/sh", "-c", "until [ -s /cfg/haproxy.cfg ]; do sleep 1; done; exec haproxy -W -db -f /cfg/haproxy.cfg"]
     ports:
-      - "26257:26257"   # SQL
-      - "8404:8404"     # HAProxy stats UI
+      - "26257:26257"   # SQL, e.g. Banko: postgresql://root@localhost:26257/defaultdb?sslmode=disable
+      - "8080:8080"     # DB Console, served by whichever node is up
+      - "8404:8404"     # HAProxy stats
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    depends_on:
-      - toxiproxy-east
-      - toxiproxy-west
-      - toxiproxy-central
+      - haproxy-config:/cfg:ro
+    networks: [chaos]
 
-  toxiproxy-east:
-    image: ghcr.io/shopify/toxiproxy:2.9.0
-    container_name: toxiproxy-east
-    command: ["-host=0.0.0.0","-config","/config/east.json"]
-    ports:
-      - "18074:8474" # REST for east
-      - "16001:16001"
-      - "16002:16002"
-    volumes:
-      - ./toxiproxy/east.json:/config/east.json:ro
-    depends_on:
-      - crdb-e1a
-      - crdb-e1b
-
-  toxiproxy-west:
-    image: ghcr.io/shopify/toxiproxy:2.9.0
-    container_name: toxiproxy-west
-    command: ["-host=0.0.0.0","-config","/config/west.json"]
-    ports:
-      - "18075:8474" # REST for west
-      - "16011:16011"
-      - "16012:16012"
-    volumes:
-      - ./toxiproxy/west.json:/config/west.json:ro
-    depends_on:
-      - crdb-w2a
-      - crdb-w2b
-
-  toxiproxy-central:
-    image: ghcr.io/shopify/toxiproxy:2.9.0
-    container_name: toxiproxy-central
-    command: ["-host=0.0.0.0","-config","/config/central.json"]
-    ports:
-      - "18076:8474" # REST for central
-      - "16021:16021"
-    volumes:
-      - ./toxiproxy/central.json:/config/central.json:ro
-    depends_on:
-      - crdb-c1
-
-  # CockroachDB nodes (5 total, 3 regions)
-  crdb-e1a:
-    image: *cockroach-image
-    container_name: crdb-e1a
-    command: ["start","--insecure","--listen-addr=0.0.0.0:26257","--advertise-addr=crdb-e1a:26257","--http-addr=0.0.0.0:8080",
-              "--locality=region=us-east-1,zone=a","--join=crdb-e1a:26257,crdb-e1b:26257,crdb-w2a:26257,crdb-w2b:26257,crdb-c1:26257"]
-    ports:
-      - "8080:8080"
-
-  crdb-e1b:
-    image: *cockroach-image
-    container_name: crdb-e1b
-    command: ["start","--insecure","--listen-addr=0.0.0.0:26257","--advertise-addr=crdb-e1b:26257","--http-addr=0.0.0.0:8080",
-              "--locality=region=us-east-1,zone=b","--join=crdb-e1a:26257,crdb-e1b:26257,crdb-w2a:26257,crdb-w2b:26257,crdb-c1:26257"]
-    ports:
-      - "8081:8080"
-
-  crdb-w2a:
-    image: *cockroach-image
-    container_name: crdb-w2a
-    command: ["start","--insecure","--listen-addr=0.0.0.0:26257","--advertise-addr=crdb-w2a:26257","--http-addr=0.0.0.0:8080",
-              "--locality=region=us-west-2,zone=a","--join=crdb-e1a:26257,crdb-e1b:26257,crdb-w2a:26257,crdb-w2b:26257,crdb-c1:26257"]
-    ports:
-      - "8082:8080"
-
-  crdb-w2b:
-    image: *cockroach-image
-    container_name: crdb-w2b
-    command: ["start","--insecure","--listen-addr=0.0.0.0:26257","--advertise-addr=crdb-w2b:26257","--http-addr=0.0.0.0:8080",
-              "--locality=region=us-west-2,zone=b","--join=crdb-e1a:26257,crdb-e1b:26257,crdb-w2a:26257,crdb-w2b:26257,crdb-c1:26257"]
-    ports:
-      - "8083:8080"
-
-  crdb-c1:
-    image: *cockroach-image
-    container_name: crdb-c1
-    command: ["start","--insecure","--listen-addr=0.0.0.0:26257","--advertise-addr=crdb-c1:26257","--http-addr=0.0.0.0:8080",
-              "--locality=region=us-central-1,zone=a","--join=crdb-e1a:26257,crdb-e1b:26257,crdb-w2a:26257,crdb-w2b:26257,crdb-c1:26257"]
-    ports:
-      - "8084:8080"
-
-  # Initialize the cluster once
-  crdb-init:
-    image: *cockroach-image
-    container_name: crdb-init
-    depends_on:
-      - crdb-e1a
-      - crdb-e1b
-      - crdb-w2a
-      - crdb-w2b
-      - crdb-c1
-    entrypoint: ["/bin/sh","-c"]
-    command: >
-      "sleep 4 &&
-       /cockroach/cockroach init --insecure --host=crdb-e1a:26257 ||
-       true"
-
-  # Bootstrap SQL: locations + demo DB
-  crdb-bootstrap:
-    image: *cockroach-image
-    container_name: crdb-bootstrap
-    depends_on:
-      - crdb-init
-    volumes:
-      - ./init.sql:/init.sql:ro
-    entrypoint: ["/bin/sh","-c"]
-    command: >
-      "until /cockroach/cockroach sql --insecure --host=crdb-e1a:26257 -e 'select 1'; do sleep 1; done &&
-       echo 'Waiting for all regions to be available...' &&
-       until [ $(/cockroach/cockroach sql --insecure --host=crdb-e1a:26257 -e 'SELECT count(*) FROM [SHOW REGIONS FROM CLUSTER]' --format=tsv 2>/dev/null | tail -1) -ge 3 ]; do 
-         echo 'Still waiting for regions...'; 
-         sleep 2; 
-       done &&
-       echo 'All regions ready, running init.sql...' &&
-       /cockroach/cockroach sql --insecure --host=crdb-e1a:26257 --file=/init.sql"
-
-  # Backend UI + API (serves a minimal dashboard + chaos controls)
-  chaos-backend:
-    build: ./backend
-    container_name: chaos-backend
-    privileged: true
+  control-plane:
+    build: ./controlplane
+    image: crdb-chaos-control-plane:local
+    container_name: crdb-chaos-control-plane
+    restart: unless-stopped
+    # SELinux hosts (Podman machine, Fedora) block the mounted socket otherwise; narrower than privileged.
+    security_opt: ["label=disable"]
     environment:
-      EAST_API: http://toxiproxy-east:8474
-      WEST_API: http://toxiproxy-west:8474
-      CENTRAL_API: http://toxiproxy-central:8474
-      EAST_PROXIES: e1a,e1b
-      WEST_PROXIES: w2a,w2b
-      CENTRAL_PROXIES: c1
-      DB_HOST: haproxy
-      DB_PORT: "26257"
-      DB_USER: root
-      DB_NAME: defaultdb
-      # Multi-user support: default 4 workers (~10-20 concurrent users)
-      # For larger labs, increase: GUNICORN_WORKERS=8 (20-40 users)
-      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+      PRESET: ${PRESET:-aws}
+      DEPLOYMENT_MODEL: ${DEPLOYMENT_MODEL:-multi-region}
+      CRDB_VERSION: ${CRDB_VERSION:-v26.3.2}
+      CHAOS_SUBNET: ${CHAOS_SUBNET:-10.77.0.0/16}
+      CHAOS_NETWORK: crdb-chaos
+      MAX_NODES: ${MAX_NODES:-15}
+      TIME_UNTIL_STORE_DEAD: ${TIME_UNTIL_STORE_DEAD:-1m15s}
+      CRDB_LICENSE: ${CRDB_LICENSE:-}
+      CRDB_ORG: ${CRDB_ORG:-}
+      CONTROL_TOKEN: ${CONTROL_TOKEN:-}
+      TRIGGER_TOKEN: ${TRIGGER_TOKEN:-}
+      PANEL_PORT: ${PANEL_PORT:-8088}
     ports:
-      - "8088:8088"
+      - "${PANEL_PORT:-8088}:8088"
     volumes:
-      # Docker socket - configurable for Podman compatibility
-      # Default: /var/run/docker.sock (standard Docker)
-      # Podman: Set DOCKER_SOCKET=/run/user/$(id -u)/podman/podman.sock in .env
-      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:rw
-    depends_on:
-      - haproxy
-      - toxiproxy-east
-      - toxiproxy-west
-      - toxiproxy-central
-      - crdb-bootstrap
+      # Docker socket. Podman without the /var/run/docker.sock symlink: set DOCKER_SOCKET in .env.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./presets:/app/presets
+      - ./catalog:/app/catalog:ro
+      - ./web:/app/web:ro
+      - control-data:/data
+      - haproxy-config:/haproxy
+    networks: [chaos]
+    depends_on: [haproxy]
+
+networks:
+  chaos:
+    name: crdb-chaos
+    ipam:
+      config:
+        - subnet: ${CHAOS_SUBNET:-10.77.0.0/16}
+
+volumes:
+  haproxy-config:
+  control-data:

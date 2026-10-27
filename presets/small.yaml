@@ -1,0 +1,10 @@
+# One node per region for laptops with 8 GB. Plain 3x replication still
+# survives a region outage; scenarios that need multi-region SQL are unavailable.
+display_name: Global Payments
+cluster_id: global-payments
+survival_goal: auto
+latency: realistic
+regions:
+  - { name: us-east-1, provider: aws, nodes: 1, primary: true }
+  - { name: us-west-2, provider: aws, nodes: 1 }
+  - { name: eu-west-1, provider: aws, nodes: 1 }

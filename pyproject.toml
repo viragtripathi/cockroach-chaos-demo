@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["controlplane", "tools"]
+markers = ["integration: needs a running stack started by ./run.sh (set CHAOS_INTEGRATION=1)"]

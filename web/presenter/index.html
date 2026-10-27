@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Presenter · CockroachDB chaos demo</title>
+  <link rel="icon" href="/static/shared/favicon.ico">
+  <link rel="stylesheet" href="/static/shared/tokens.css">
+  <link rel="stylesheet" href="/static/presenter/presenter.css">
+</head>
+<body>
+  <header class="bar">
+    <img class="logo" src="/static/shared/crl-logo.svg" alt="Cockroach Labs">
+    <span class="title">Presenter</span>
+    <span class="status" id="status">Connecting…</span>
+    <a class="stage-link" href="/" target="_blank" rel="noopener" id="stage-link">Open stage ↗</a>
+    <button class="icon" id="theme" type="button" title="Theme">☀</button>
+    <button class="close" id="close-drawer" type="button" title="Close (Esc)">✕ Close</button>
+  </header>
+  <div class="locked" id="locked" hidden>Locked. This panel needs the control token: open <code>/presenter?token=…</code> once in this browser.</div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="cluster" class="on">Cluster</button>
+    <button data-tab="chaos">Chaos</button>
+    <button data-tab="workload">Workload</button>
+    <button data-tab="scenarios">Scenarios</button>
+    <button data-tab="booth">Booth</button>
+    <button data-tab="system">System</button>
+  </nav>
+  <main>
+    <section class="tab" id="tab-cluster">
+      <div class="card" id="cluster-now"></div>
+      <div class="card">
+        <h3>Inter-region latency</h3>
+        <div class="seg" id="latency">
+          <button data-v="off">Off</button><button data-v="0.5">Half</button><button data-v="realistic">Realistic</button><button data-v="2">Double</button>
+        </div>
+        <p class="hint">Realistic latency comes from the distance between regions. Banko's loader is slower with it on.</p>
+      </div>
+      <div class="card">
+        <h3>Survival goal and primary region</h3>
+        <div class="row">
+          <div class="seg" id="goal"><button data-v="zone">Survive zone</button><button data-v="region">Survive region</button></div>
+        </div>
+        <div class="row"><label>Primary region <select id="primary"></select></label><button class="btn" id="primary-go">Make primary</button></div>
+      </div>
+      <div class="card">
+        <h3>Scale</h3>
+        <div class="row"><label>Add a node in <select id="add-node-region"></select></label><button class="btn" id="add-node">Add node</button></div>
+        <div class="row wrap">
+          <label>Provider <select id="add-region-provider"></select></label>
+          <label>Region <select id="add-region-name"></select></label>
+          <label class="custom-name" hidden>Name <input id="add-region-custom" placeholder="e.g. mars-north-1"></label>
+          <label>Nodes <input id="add-region-nodes" type="number" min="1" max="12" value="3"></label>
+          <button class="btn" id="add-region">Add region</button>
+        </div>
+        <p class="hint">Decommission a node or remove a region from its menu on the stage, or from the Chaos tab.</p>
+      </div>
+      <div class="card">
+        <h3>Presets</h3>
+        <div class="row"><span class="msg">Deployment model</span>
+          <div class="seg" id="model"><button data-v="multi-region" class="on">Multi-region</button><button data-v="single-region">Single region</button></div></div>
+        <p class="hint">Rebuilding wipes every database, including Banko's <code>defaultdb</code>: restart Banko afterwards.</p>
+        <div class="presets" id="presets"></div>
+      </div>
+      <div class="card">
+        <h3>Custom preset</h3>
+        <div class="row wrap">
+          <label>Start from <select id="preset-src"></select></label>
+          <label>Save as <input id="preset-name" placeholder="my-demo"></label>
+        </div>
+        <textarea id="preset-yaml" spellcheck="false" rows="14"></textarea>
+        <div class="row"><button class="btn" id="preset-save">Validate and save</button><button class="btn danger" id="preset-rebuild" disabled>Rebuild with it</button><span class="msg" id="preset-msg"></span></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-chaos" hidden>
+      <div class="card">
+        <h3>Target</h3>
+        <div class="row wrap">
+          <div class="seg" id="kind"><button data-v="node" class="on">Node</button><button data-v="zone">Zone</button><button data-v="region">Region</button><button data-v="all">Everything</button></div>
+          <select id="target"></select>
+        </div>
+        <div class="actions" id="chaos-actions">
+          <button class="btn danger" data-a="crash">Crash</button>
+          <button class="btn danger" data-a="outage">Outage</button>
+          <button class="btn" data-a="stop">Planned stop</button>
+          <button class="btn" data-a="partition">Partition</button>
+          <button class="btn" data-a="isolate">Isolate</button>
+          <button class="btn" data-a="brownout">Brownout</button>
+          <button class="btn prim" data-a="recover">Recover</button>
+        </div>
+        <div class="row wrap">
+          <label>Brownout delay <input id="bo-delay" type="number" value="700" min="0" max="5000"> ms</label>
+          <label>jitter <input id="bo-jitter" type="number" value="200" min="0" max="5000"> ms</label>
+          <label>loss <input id="bo-loss" type="number" value="2" min="0" max="100" step="0.5"> %</label>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row"><button class="btn prim big" id="recover-all">Recover everything</button><button class="btn danger" id="decommission">Decommission node</button><button class="btn danger" id="remove-region">Remove region</button></div>
+        <div id="flags" class="flags"></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-workload" hidden>
+      <div class="card">
+        <h3>Payments</h3>
+        <p class="hint">Transfers between 10,000 accounts that always total $10,000,000. On a multi-region cluster every account and every worker lives in a region: workers connect to their own region, so each transfer's statements are local and only the commit crosses a region. A share of transfers goes to another region on purpose. Uses the separate <code>chaos</code> database.</p>
+        <div class="row"><button class="btn prim" id="wl-start">Start</button><button class="btn" id="wl-stop">Stop</button></div>
+        <div class="row wrap">
+          <label>Workers <input id="wl-workers" type="number" min="1" max="64" value="48"></label>
+          <label>Target rate <input id="wl-rate" type="number" min="1" max="5000" value="250"> tx/s</label>
+          <label>Cross-region <input id="wl-cross" type="number" min="0" max="50" value="10"> %</label>
+          <button class="btn" id="wl-apply">Apply</button>
+        </div>
+      </div>
+      <div class="card"><div class="stats" id="wl-stats"></div></div>
+    </section>
+
+    <section class="tab" id="tab-scenarios" hidden>
+      <div class="card" id="sc-current" hidden></div>
+      <div class="card"><div id="sc-list"></div></div>
+    </section>
+
+    <section class="tab" id="tab-booth" hidden>
+      <div class="card">
+        <h3>Booth mode</h3>
+        <div class="row wrap">
+          <label class="check"><input type="checkbox" id="booth-on"> Enabled</label>
+          <label>Auto-heal after <input id="booth-heal" type="number" min="5" max="3600" value="45"> s</label>
+          <button class="btn" id="booth-save">Save</button>
+        </div>
+        <p class="hint">In booth mode visitors can never break the cluster: random targets only pick victims the survival goal tolerates, and everything recovers automatically after the quiet period.</p>
+        <div class="row"><span id="counters"></span><button class="btn" id="counters-reset">Reset counters</button></div>
+      </div>
+      <div class="card">
+        <h3>Triggers</h3>
+        <p class="hint">Hardware buttons call <code>POST /api/triggers/&lt;id&gt;</code>. Stage keys 1–9 fire the mapped trigger (USB HID devices like a Makey Makey or a big red button work with no code).</p>
+        <table class="triggers"><thead><tr><th>Id</th><th>Action</th><th>Target</th><th>Value</th><th>Key</th><th></th></tr></thead><tbody id="trig-rows"></tbody></table>
+        <div class="row"><button class="btn" id="trig-add">Add trigger</button><button class="btn prim" id="trig-save">Save triggers</button><span class="msg" id="trig-msg"></span></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-system" hidden>
+      <div class="card"><h3>Endpoints</h3><dl class="kv" id="endpoints"></dl></div>
+      <div class="card"><h3>Last operation</h3><div id="operation"></div></div>
+      <div class="card"><h3>Events</h3><div id="log" class="log"></div></div>
+    </section>
+  </main>
+  <div class="toast" id="toast" hidden></div>
+  <script type="module" src="/static/presenter/presenter.js"></script>
+</body>
+</html>

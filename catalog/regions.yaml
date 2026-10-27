@@ -1,0 +1,53 @@
+# Real cloud regions: city label, map coordinates [lat, lon] and zone names.
+# Presets and the presenter picker use these; unknown regions fall back to naming rules.
+providers:
+  aws:
+    us-east-1: { label: N. Virginia, location: [38.9, -77.4], zones: [us-east-1a, us-east-1b, us-east-1c] }
+    us-east-2: { label: Ohio, location: [40.0, -83.0], zones: [us-east-2a, us-east-2b, us-east-2c] }
+    us-west-1: { label: N. California, location: [37.4, -121.9], zones: [us-west-1a, us-west-1c] }
+    us-west-2: { label: Oregon, location: [45.8, -119.7], zones: [us-west-2a, us-west-2b, us-west-2c] }
+    ca-central-1: { label: Canada Central, location: [45.5, -73.6], zones: [ca-central-1a, ca-central-1b, ca-central-1d] }
+    eu-west-1: { label: Ireland, location: [53.3, -6.3], zones: [eu-west-1a, eu-west-1b, eu-west-1c] }
+    eu-west-2: { label: London, location: [51.5, -0.1], zones: [eu-west-2a, eu-west-2b, eu-west-2c] }
+    eu-central-1: { label: Frankfurt, location: [50.1, 8.7], zones: [eu-central-1a, eu-central-1b, eu-central-1c] }
+    ap-northeast-1: { label: Tokyo, location: [35.7, 139.7], zones: [ap-northeast-1a, ap-northeast-1c, ap-northeast-1d] }
+    ap-southeast-1: { label: Singapore, location: [1.3, 103.8], zones: [ap-southeast-1a, ap-southeast-1b, ap-southeast-1c] }
+    ap-southeast-2: { label: Sydney, location: [-33.9, 151.2], zones: [ap-southeast-2a, ap-southeast-2b, ap-southeast-2c] }
+    ap-south-1: { label: Mumbai, location: [19.1, 72.9], zones: [ap-south-1a, ap-south-1b, ap-south-1c] }
+    sa-east-1: { label: São Paulo, location: [-23.5, -46.6], zones: [sa-east-1a, sa-east-1b, sa-east-1c] }
+  gcp:
+    us-east1: { label: South Carolina, location: [33.2, -80.0], zones: [us-east1-b, us-east1-c, us-east1-d] }
+    us-east4: { label: N. Virginia, location: [39.0, -77.5], zones: [us-east4-a, us-east4-b, us-east4-c] }
+    us-central1: { label: Iowa, location: [41.3, -95.9], zones: [us-central1-a, us-central1-b, us-central1-c] }
+    us-west1: { label: Oregon, location: [45.6, -121.2], zones: [us-west1-a, us-west1-b, us-west1-c] }
+    europe-west1: { label: Belgium, location: [50.4, 3.8], zones: [europe-west1-b, europe-west1-c, europe-west1-d] }
+    europe-west2: { label: London, location: [51.5, -0.1], zones: [europe-west2-a, europe-west2-b, europe-west2-c] }
+    europe-west3: { label: Frankfurt, location: [50.1, 8.7], zones: [europe-west3-a, europe-west3-b, europe-west3-c] }
+    asia-northeast1: { label: Tokyo, location: [35.7, 139.7], zones: [asia-northeast1-a, asia-northeast1-b, asia-northeast1-c] }
+    asia-southeast1: { label: Singapore, location: [1.3, 103.8], zones: [asia-southeast1-a, asia-southeast1-b, asia-southeast1-c] }
+    australia-southeast1: { label: Sydney, location: [-33.9, 151.2], zones: [australia-southeast1-a, australia-southeast1-b, australia-southeast1-c] }
+  azure:
+    eastus: { label: Virginia, location: [37.4, -79.8], zones: [eastus-1, eastus-2, eastus-3] }
+    eastus2: { label: Virginia, location: [36.7, -78.4], zones: [eastus2-1, eastus2-2, eastus2-3] }
+    centralus: { label: Iowa, location: [41.6, -93.6], zones: [centralus-1, centralus-2, centralus-3] }
+    westus2: { label: Washington, location: [47.2, -119.9], zones: [westus2-1, westus2-2, westus2-3] }
+    westus3: { label: Arizona, location: [33.4, -112.1], zones: [westus3-1, westus3-2, westus3-3] }
+    northeurope: { label: Ireland, location: [53.3, -6.3], zones: [northeurope-1, northeurope-2, northeurope-3] }
+    westeurope: { label: Netherlands, location: [52.4, 4.9], zones: [westeurope-1, westeurope-2, westeurope-3] }
+    uksouth: { label: London, location: [51.5, -0.1], zones: [uksouth-1, uksouth-2, uksouth-3] }
+    japaneast: { label: Tokyo, location: [35.7, 139.7], zones: [japaneast-1, japaneast-2, japaneast-3] }
+    southeastasia: { label: Singapore, location: [1.3, 103.8], zones: [southeastasia-1, southeastasia-2, southeastasia-3] }
+    australiaeast: { label: New South Wales, location: [-33.9, 151.2], zones: [australiaeast-1, australiaeast-2, australiaeast-3] }
+  ibm:
+    us-south: { label: Dallas, location: [32.8, -96.8], zones: [us-south-1, us-south-2, us-south-3] }
+    us-east: { label: Washington DC, location: [38.9, -77.0], zones: [us-east-1, us-east-2, us-east-3] }
+    ca-tor: { label: Toronto, location: [43.7, -79.4], zones: [ca-tor-1, ca-tor-2, ca-tor-3] }
+    eu-de: { label: Frankfurt, location: [50.1, 8.7], zones: [eu-de-1, eu-de-2, eu-de-3] }
+    eu-gb: { label: London, location: [51.5, -0.1], zones: [eu-gb-1, eu-gb-2, eu-gb-3] }
+    jp-tok: { label: Tokyo, location: [35.7, 139.7], zones: [jp-tok-1, jp-tok-2, jp-tok-3] }
+    au-syd: { label: Sydney, location: [-33.9, 151.2], zones: [au-syd-1, au-syd-2, au-syd-3] }
+    br-sao: { label: São Paulo, location: [-23.5, -46.6], zones: [br-sao-1, br-sao-2, br-sao-3] }
+  oci:
+    us-ashburn-1: { label: Ashburn, location: [39.0, -77.5], zones: [us-ashburn-1-ad1, us-ashburn-1-ad2, us-ashburn-1-ad3] }
+    us-phoenix-1: { label: Phoenix, location: [33.4, -112.1], zones: [us-phoenix-1-ad1, us-phoenix-1-ad2, us-phoenix-1-ad3] }
+    eu-frankfurt-1: { label: Frankfurt, location: [50.1, 8.7], zones: [eu-frankfurt-1-ad1, eu-frankfurt-1-ad2, eu-frankfurt-1-ad3] }
