@@ -18,6 +18,7 @@ ACCOUNTS = 10_000
 START_BALANCE = 1_000
 TOTAL = ACCOUNTS * START_BALANCE
 HISTORY_SECONDS = 120
+RATE_SECONDS = 3  # rates shown on the stage average this many complete seconds: one slow second isn't a collapse
 MAX_RETRIES = 12
 TRANSFER_TIMEOUT = 10.0  # client-side limit per attempt; COMMIT can hang past statement_timeout during an outage
 CONN_MAX_AGE = 30.0  # like a pool's max lifetime: recovered nodes get traffic back within ~30 s
@@ -124,16 +125,22 @@ class Stats:
             errors = dict(self.errors_total)
 
         recent = sorted(ms for ms, _, _ in window)
-        last = done[-1] if done else empty
+        lately = done[-RATE_SECONDS:]  # only seconds since the first commit: no zeros from before the start
+
+        def rate(count: Callable[[dict], int]) -> int:
+            return round(sum(count(b) for b in lately) / len(lately)) if lately else 0
+
         by_home = {}
         for home in sorted({h for _, h, _ in window if h}):
             ms = sorted(m for m, h, _ in window if h == home)
-            by_home[home] = {"p50_ms": _pct(ms, 0.5), "p95_ms": _pct(ms, 0.95), "tps": last["homes"].get(home, 0)}
+            by_home[home] = {"p50_ms": _pct(ms, 0.5), "p95_ms": _pct(ms, 0.95), "tps": rate(lambda b: b["homes"].get(home, 0))}
         cross_ms = sorted(m for m, _, c in window if c)
         return {"history": [{k: v for k, v in h.items() if k not in ("homes", "cross")} for h in done[-HISTORY_SECONDS:]],
+                "tps": rate(lambda b: b["commits"]), "retries_s": rate(lambda b: b["retries"]),
+                "errors_s": rate(lambda b: b["errors"]),
                 "p50_ms": _pct(recent, 0.5), "p95_ms": _pct(recent, 0.95), "p99_ms": _pct(recent, 0.99),
                 "errors_total": errors, "by_home": by_home,
-                "cross_region": {"p50_ms": _pct(cross_ms, 0.5), "p95_ms": _pct(cross_ms, 0.95), "tps": last["cross"]}}
+                "cross_region": {"p50_ms": _pct(cross_ms, 0.5), "p95_ms": _pct(cross_ms, 0.95), "tps": rate(lambda b: b["cross"])}}
 
 
 class Workload:
@@ -357,13 +364,12 @@ class Workload:
     def status(self) -> dict:
         w = self.stats.window()
         history = w["history"]
-        last = history[-1] if history else {"commits": 0, "retries": 0, "errors": 0}
         if self._failure_at is not None and self._recovery is None:
             self._recovery = recovery_time(history, self._failure_at, self._baseline)
         balance = self._balance
         return {
             "running": self.running, "workers": self.workers, "rate": self.rate,
-            "tps": last["commits"], "retries_s": last["retries"], "errors_s": last["errors"],
+            "tps": w["tps"], "retries_s": w["retries_s"], "errors_s": w["errors_s"],
             "p50_ms": w["p50_ms"], "p95_ms": w["p95_ms"], "p99_ms": w["p99_ms"], "errors_total": w["errors_total"],
             "failed_total": self.stats.failed_total, "deduplicated": self.stats.deduplicated,
             "balance": balance, "expected": TOTAL,

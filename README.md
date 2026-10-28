@@ -12,10 +12,11 @@ puts a global load balancer in front of it, and gives you:
 - a built-in **Payments** workload with a $10,000,000 invariant, plus Banko AI Assistant support
 - eleven guided **scenarios**, a **booth mode** with hardware triggers, and a **motion explainer**
 
-![The stage during a primary-region outage: us-east-1 down, 4 of 6 nodes live, no unavailable ranges, $0 lost, payments recovered in 6.8 s](docs/images/stage-region-outage.png)
+![The stage during a primary-region outage: us-east-1 down, 4 of 6 nodes live, no unavailable ranges, $0 lost, payments recovered in 8.1 s](docs/images/stage-region-outage.png)
 
 *The stage during a primary-region outage under load: us-east-1 is down, every range is still available, no money
-is lost, and payments are back to normal in 6.8 s, with us-east-1's customers served from us-west-2 until it heals.*
+is lost, and payments are back to normal in 8.1 s at the full 250 transfers/s, with us-east-1's customers served
+from us-west-2 until it heals.*
 
 Everything runs locally; the stage never shows that. Nothing is sent anywhere.
 

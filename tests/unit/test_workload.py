@@ -222,6 +222,18 @@ def test_stopping_clears_a_pending_recovery_measurement():
     assert w.status()["failure_at"] is None and w.status()["recovering"] is False
 
 
+def test_rates_average_the_last_three_seconds_so_the_stage_number_holds_steady():
+    # one slow second must not read as a collapse on the big screen: 250, 250, 156 -> 219, not 156
+    s = Stats(clock=lambda: 13.5)
+    for sec, n in ((10, 250), (11, 250), (12, 156)):
+        for i in range(n):
+            s.commit(80, "us-east-1", now=sec + 0.5, home="us-east-1", cross=i < n // 10)
+    snap = s.window(now=13.5)
+    assert snap["tps"] == 219
+    assert snap["by_home"]["us-east-1"]["tps"] == 219
+    assert snap["cross_region"]["tps"] == 22  # (25 + 25 + 15) / 3
+
+
 def test_stats_report_latency_per_home_region_and_for_cross_region_transfers():
     s = Stats(clock=lambda: 10.4)
     for ms in range(60, 70):
