@@ -1,0 +1,2 @@
+langchain-cockroachdb>=0.5.0
+langchain>=1.0

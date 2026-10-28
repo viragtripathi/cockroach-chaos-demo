@@ -197,6 +197,14 @@ regions), and adding a region live adds it to `defaultdb` too. Realistic latency
 in the presenter console if needed. Rebuilding with another preset wipes `defaultdb`: restart Banko afterwards.
 A containerized Banko can join the `crdb-chaos` network and use `postgresql://root@haproxy:26257/defaultdb?sslmode=disable`.
 
+## LangGraph agents
+
+`agents/agent_demo.py` runs 16 LangGraph agents on this cluster with
+[langchain-cockroachdb](https://github.com/cockroachdb/langchain-cockroachdb). Each agent's conversation is saved by
+the checkpointer and its answers come from a vector store search. The model is scripted, so it needs no API key.
+Start it, wait for `READY`, take a node or a region down, and once the cluster recovers it checks every conversation
+for lost or duplicated messages. It uses its own `agent_demo` database. See [agents/README.md](agents/README.md).
+
 ## Configuration (`.env`)
 
 See `.env.example`: `PRESET`, `CRDB_VERSION`, `PANEL_PORT`, `CHAOS_SUBNET` (if 10.77.0.0/16 collides with a VPN),
