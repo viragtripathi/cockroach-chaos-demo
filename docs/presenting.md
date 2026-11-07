@@ -30,8 +30,10 @@ want a cloud-looking address in the browser bar, add a hosts-file entry such as
 ## 15 minutes: resilience plus multi-region
 
 1. 5-minute flow above.
-2. **ZONE vs REGION survival**: same failure, before and after one `ALTER DATABASE`. Under ZONE the payments
-   homed in the lost region stall while the other regions keep paying; under REGION every region keeps flowing.
+2. **ZONE vs REGION survival** (3 nodes in every region: the `residency` preset): same failure, before and after
+   one `ALTER DATABASE`. Under ZONE the payments homed in the lost region stall while the other regions keep paying;
+   under REGION every region keeps flowing. Cross-region transfers pause for the ZONE half (one to a customer in the
+   lost region would wait for that region too) and come back with REGION survival.
 3. **REGIONAL BY ROW**: the latency heatmap. The diagonal is local (about 1 ms); everything else pays the round trip.
 4. **Elastic scale**: add a node live, then decommission it and watch replicas drain first.
 5. Close on the Continuum explainer (`/explainer/continuum`, when your install includes it) if the audience is executive.
@@ -46,6 +48,34 @@ want a cloud-looking address in the browser bar, add a hosts-file entry such as
 6. **Split-brain test**: an isolated region refuses to commit alone; nothing diverges.
 7. **Time travel**: undo an accidental `DELETE` with `AS OF SYSTEM TIME`.
 8. Q&A with the chaos controls open: let the audience pick what to break.
+
+## Multi-cloud stretch cluster
+
+For customers weighing two clouds. Build it with `./run.sh up --preset stretch` (this wipes the cluster's data,
+Banko's included).
+
+1. Point at the three cards: AWS and Azure serve, the GCP node is labeled **Tie-breaker**. Its heartbeat is tall (it
+   holds a copy of every range) and slow (no payment goes through it).
+2. Scenario **Stretch cluster: lose a whole cloud**. Take down AWS: payments continue on Azure, money lost $0. The
+   GCP node is why: Azure's 2 copies plus its 1 are 3 of 5, a majority.
+3. Bring AWS back. The step finishes when AWS has caught up (about 15 s): until then the tie-breaker's vote is still
+   needed. Then take down the tie-breaker: nothing happens, recovery time stays at 0 s.
+4. Close on the last card: losing AWS and the tie-breaker together leaves Azure alone, so the third site is worth its
+   one node.
+
+## Data domiciling
+
+For customers with residency rules (GDPR and the like). Build it with `./run.sh up --preset residency`: three regions
+with three nodes each (this wipes the cluster's data, Banko's included).
+
+1. Scenario **Data domiciling**. The first step shows the default: each customer's row keeps read-only copies in the
+   other regions, for fast reads there. Say it plainly: by default, data crosses borders.
+2. Next: one super region per region. Copies outside their home region: 0, checked on every range that holds a
+   customer. One table, one database, three jurisdictions.
+3. Next: a node in Singapore goes down. The Singapore customer is still written, and nothing is copied abroad.
+4. Next: all of Singapore goes down. US and EU customers keep working and Payments recovers; the Singapore customer
+   waits for her region. Be straight about it: that is the price of keeping her data at home. It's also why the
+   cluster has three regions: with two, losing one could stop them all.
 
 ## Booth
 

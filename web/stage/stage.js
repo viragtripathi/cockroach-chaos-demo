@@ -279,15 +279,13 @@ function regionActions(region, nodes) {
   return box;
 }
 
-function nodeTile(node, rates, maxReplicas) {
+function nodeTile(node, rates, maxReplicas, maxRate) {
   const [look, label] = nodeLook(node, state.operation);
   const tile = el('div', `node ${look}`);
   tile.dataset.name = node.name;
   tile.dataset.fb = `node:${node.name}`;
-  const bar = el('div', 'bar');
-  const fill = el('i');
-  fill.style.width = `${node.replicas ? Math.max(3, Math.round(100 * node.replicas / maxReplicas)) : 0}%`;
-  bar.append(fill);
+  const r = rates && rates[node.name];
+  const beat = tip(heartbeat(node, look, r && look !== 'dead' ? r.txn_s : 0, maxRate, maxReplicas), G.heartbeat);
   const meta = el('span', 'nl');
   const showCounts = node.replicas != null && look !== 'dead';
   if (label) {
@@ -300,8 +298,7 @@ function nodeTile(node, rates, maxReplicas) {
       tipped(`L ${node.leases}`, G.leases(node.leases)));
   }
   if (!meta.childNodes.length) meta.textContent = ' ';
-  tile.append(el('span', 'nn', shortName(node)), bar, meta);
-  const r = rates && rates[node.name];
+  tile.append(el('span', 'nn', shortName(node)), beat, meta);
   if (r && r.txn_s >= 1 && look !== 'dead') {
     const rate = tipped(`${fmt(r.txn_s)}/s`, G.rate(fmt(r.txn_s)));
     rate.classList.add('rate');
@@ -312,6 +309,136 @@ function nodeTile(node, rates, maxReplicas) {
   lastLiveness.set(node.name, look);
   tile.onclick = (e) => { if (canControl) openNodeMenu(node, e.currentTarget); };
   return tile;
+}
+
+/* ---------- node heartbeats ---------- */
+// Each node tile shows a heart-monitor trace, so a healthy node looks alive and a dead one flatlines. Beat height is
+// the node's share of the replicas (a new node starts faint and strengthens as data moves onto it, a draining node
+// fades); beat rate follows its traffic. Tiles are rebuilt on every update, so each node keeps one canvas across
+// re-renders and the trace never restarts.
+
+const beats = new Map();  // node name -> trace state
+const SWEEP_S = 2.6;      // seconds for the pen to cross a tile
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
+
+function gauss(x, mu, sigma) { const d = (x - mu) / sigma; return Math.exp(-0.5 * d * d); }
+
+// One PQRST complex over phase 0..1, baseline 0, R peak 1.
+function ecg(p) {
+  if (p < 0 || p > 1) return 0;
+  return 0.12 * gauss(p, 0.12, 0.04) - 0.1 * gauss(p, 0.3, 0.018) + gauss(p, 0.34, 0.022)
+    - 0.28 * gauss(p, 0.385, 0.02) + 0.22 * gauss(p, 0.62, 0.07);
+}
+
+function heartbeat(node, look, rate, maxRate, maxReplicas) {
+  let b = beats.get(node.name);
+  if (!b) {
+    const seed = [...node.name].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
+    b = { canvas: el('canvas', 'beat'), buf: [], pen: 0, last: 0, period: 1, gain: 1, measuredAt: -1,
+      beatAt: performance.now() / 1000 - (seed % 1000) / 1000 };  // each node starts at its own point in the rhythm
+    beats.set(node.name, b);
+  }
+  const share = node.replicas ? Math.min(1, node.replicas / maxReplicas) : 0;
+  b.look = look;
+  b.amp = look === 'joining' || look === 'draining' ? Math.max(0.12, share) : 0.35 + 0.65 * share;
+  b.bpm = 58 + 42 * Math.min(1, (rate || 0) / Math.max(1, maxRate));
+  b.detachedAt = 0;
+  if (!drawBeats.raf) drawBeats.raf = requestAnimationFrame(drawBeats);
+  return b.canvas;
+}
+
+// The next beat: a steady rhythm with a little natural variation; a brownout stumbles, slow and uneven, now and then
+// skipping a beat.
+function nextBeat(b) {
+  if (b.look === 'brownout') {
+    b.period = (60 / 46) * (0.7 + Math.random() * 0.8);
+    b.gain = Math.random() < 0.18 ? 0 : 0.5 + Math.random() * 0.5;
+  } else {
+    b.period = (60 / b.bpm) * (0.97 + Math.random() * 0.06);
+    b.gain = 1;
+  }
+}
+
+function sample(b, t) {
+  if (b.look === 'dead' || b.look === 'unknown' || b.look === 'missing') return 0;
+  while (t >= b.beatAt + b.period) { b.beatAt += b.period; nextBeat(b); }
+  return b.amp * b.gain * ecg((t - b.beatAt) / Math.min(0.62, b.period * 0.9));
+}
+
+function drawBeats(ms) {
+  if (!beats.size) { drawBeats.raf = null; return; }
+  drawBeats.raf = requestAnimationFrame(drawBeats);
+  const now = ms / 1000;
+  if (!(now - drawBeats.scaleAt < 0.5)) {
+    drawBeats.scaleAt = now;
+    drawBeats.scale = $('stage').getBoundingClientRect().width / 1920 || 1;
+  }
+  const still = REDUCED_MOTION.matches;
+  for (const [name, b] of beats) {
+    const c = b.canvas;
+    if (!c.isConnected) {  // its node is gone (removed, or the cluster rebuilt): forget it after a while
+      b.detachedAt = b.detachedAt || now;
+      if (now - b.detachedAt > 15) beats.delete(name);
+      continue;
+    }
+    if (now - b.measuredAt > 0.5) {  // size and colour change rarely: theme switch, resize, a new state
+      b.measuredAt = now;
+      const r = c.getBoundingClientRect(), s = drawBeats.scale;
+      b.w = Math.max(10, Math.round(r.width / s)); b.h = Math.max(8, r.height / s);
+      b.k = (window.devicePixelRatio || 1) * s;
+      const cw = Math.round(b.w * b.k), ch = Math.round(b.h * b.k);
+      if (c.width !== cw || c.height !== ch) { c.width = cw; c.height = ch; }
+      if (b.buf.length !== b.w) { b.buf = new Array(b.w).fill(0); b.pen = 0; }
+      b.color = getComputedStyle(c).color;
+    }
+    if (still) {
+      // A still picture of the rhythm (or a flat line), redrawn only when something about it changes.
+      const key = `${b.look}|${b.amp.toFixed(2)}|${b.w}|${b.h}|${b.color}`;
+      if (key === b.stillKey) continue;
+      b.stillKey = key;
+      const speed = b.w / SWEEP_S, period = 60 / b.bpm, flat = ['dead', 'unknown', 'missing'].includes(b.look);
+      for (let x = 0; x < b.w; x++) b.buf[x] = flat ? 0 : b.amp * ecg(((x / speed) % period) / Math.min(0.62, period * 0.9));
+      b.pen = b.w - 1;
+    } else {
+      const dt = b.last ? Math.min(0.1, now - b.last) : 0;
+      b.last = now;
+      const speed = b.w / SWEEP_S, to = b.pen + speed * dt;
+      for (let x = Math.ceil(b.pen); x <= to; x++) b.buf[x % b.w] = sample(b, now - (to - x) / speed);
+      b.pen = to % b.w;
+    }
+    paintBeat(b, still);
+  }
+}
+
+function paintBeat(b, still) {
+  const { w, h, k } = b, ctx = b.canvas.getContext('2d');
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const base = h * 0.62, scale = h * 0.55, pen = Math.floor(b.pen);
+  ctx.strokeStyle = ctx.fillStyle = b.color;
+  ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.setLineDash(b.look === 'partitioned' || b.look === 'isolated' ? [4, 4] : b.look === 'unknown' ? [1, 5] : []);
+  // Older trace fades with distance behind the pen, and a gap just ahead of it is clear, as on a monitor's sweep.
+  const bands = still ? 1 : 10, span = still ? w : Math.floor(w * 0.93);
+  for (let band = 0; band < bands; band++) {
+    const i0 = Math.floor((span * band) / bands), i1 = Math.min(span, Math.floor((span * (band + 1)) / bands) + 1);
+    ctx.globalAlpha = still ? 0.9 : 1 - (0.85 * (band + 0.5)) / bands;
+    ctx.beginPath();
+    let prev = null;
+    for (let i = i0; i < i1; i++) {
+      const x = (pen - i + w) % w, y = base - b.buf[x] * scale;
+      if (prev === null || prev - x !== 1) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      prev = x;
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  if (!still && b.look !== 'unknown') {  // the pen itself
+    const y = base - b.buf[pen] * scale;
+    ctx.globalAlpha = 0.14; ctx.beginPath(); ctx.arc(pen, y, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.beginPath(); ctx.arc(pen, y, 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 /* ---------- educational tooltips (wording in shared/glossary.js) ---------- */
@@ -331,6 +458,7 @@ function renderRegions(s) {
   const byName = new Map(s.nodes.map((x) => [x.name, x]));
   const rates = s.traffic && s.traffic.nodes;
   const maxReplicas = Math.max(1, ...s.nodes.map((x) => x.replicas || 0));
+  const maxRate = Math.max(1, ...Object.values(rates || {}).map((x) => (x && x.txn_s) || 0));  // null: node unreadable
   box.replaceChildren(...s.regions.map((region) => {
     const nodes = region.nodes.map((name) => byName.get(name)).filter(Boolean);
     const card = el('article', `region ${region.state}`);
@@ -341,6 +469,8 @@ function renderRegions(s) {
     sub.append(el('span', 'rcity', region.label !== region.name ? region.label : ''));
     if (region.primary || region.secondary) {
       sub.append(tip(el('span', 'rrole', region.primary ? 'Primary region' : 'Secondary region'), region.primary ? G.primary : G.secondary));
+    } else if (region.tie_breaker) {
+      sub.append(tip(el('span', 'rrole tie', 'Tie-breaker'), G.tieBreaker));
     }
     const status = { healthy: 'Healthy', degraded: 'Degraded', down: 'Outage', unknown: '…' }[region.state] || region.state;
     head.append(tip(el('span', `chip rstatus ${region.state}`, status), G.regionState[region.state]));
@@ -348,7 +478,7 @@ function renderRegions(s) {
     const zoneNames = region.zones.filter((z) => nodes.some((x) => x.zone === z));
     for (const z of zoneNames) {
       const col = el('div', 'zone');
-      col.append(tip(el('div', 'zl', z), G.zone(z)), ...nodes.filter((x) => x.zone === z).map((x) => nodeTile(x, rates, maxReplicas)));
+      col.append(tip(el('div', 'zl', z), G.zone(z)), ...nodes.filter((x) => x.zone === z).map((x) => nodeTile(x, rates, maxReplicas, maxRate)));
       zones.append(col);
     }
     card.append(head, sub, zones, regionActions(region, nodes));
@@ -610,7 +740,8 @@ function renderHomes(s) {
     c.append(document.createTextNode(text));
     return c;
   };
-  const chips = s.regions.map((r, i) => {
+  const chips = s.regions.filter((r) => !r.tie_breaker).map((r) => {
+    const i = s.regions.indexOf(r);  // keep each region's chart colour
     const via = (w.homing.failover || {})[r.name];
     return chip(`${r.name} ${ms((w.by_home || {})[r.name])}${via ? ` via ${via}` : ''}`, regionColor(i));
   });

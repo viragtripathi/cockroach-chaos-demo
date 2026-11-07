@@ -145,7 +145,7 @@ class Elastic:
                 if topo.survival_goal != "none":
                     self._ops.step(op, f"Removing {name} from the multi-region databases")
                     self._run_sql([f"ALTER DATABASE {db} DROP REGION IF EXISTS {_ident(name)}" for db in DATABASES])
-                self._drain(op, topo, [n.name for n in topo.nodes if n.region == name])
+                self._drain(op, topo, [n.name for n in topo.nodes if n.region == name], settling=(f"+region={name}:",))
                 self._finish_change(op, new_topo)
             finally:
                 # Whatever happened, Payments may run again; its failure to restart never changes the outcome.
@@ -166,10 +166,13 @@ class Elastic:
             raise ElasticError("this cluster has a single region; add regions first")
         if goal == "region" and len(topo.regions) < 3:
             raise ElasticError("REGION survival needs at least 3 regions")
-        primary_nodes = sum(n.region == topo.primary.name for n in topo.nodes)
-        if goal == "zone" and primary_nodes < 3:
-            raise ElasticError(f"ZONE survival keeps 3 replicas in the primary region: it needs 3 nodes in "
-                               f"{topo.primary.name} (has {primary_nodes}); add a node there first")
+        # Payments homes accounts in every region and ZONE survival keeps each region's three voters at home, so every
+        # region that homes them needs three nodes; with two, its partitions could never be placed.
+        short = [(r.name, sum(n.region == r.name for n in topo.nodes)) for r in topo.regions if not r.tie_breaker]
+        short = [(name, count) for name, count in short if count < 3]
+        if goal == "zone" and short:
+            raise ElasticError(f"ZONE survival keeps three copies of each region's payments in that region, so every "
+                               f"region needs 3 nodes ({short[0][0]} has {short[0][1]}); add nodes first")
 
         def work(op):
             self._ops.step(op, f"Switching to {goal.upper()} survival")
@@ -184,6 +187,8 @@ class Elastic:
             raise ElasticError(f"no region named {name!r}")
         if topo.primary.name == name:
             raise ElasticError(f"{name} is already the primary region")
+        if any(r.name == name and r.tie_breaker for r in topo.regions):
+            raise ElasticError(f"{name} is the tie-breaker: it only votes and homes no data, so it can't be primary")
         if topo.survival_goal == "none":
             raise ElasticError("this cluster has a single region")
         regions = tuple(replace(r, primary=r.name == name, secondary=r.secondary and r.name != name) for r in topo.regions)
@@ -311,7 +316,9 @@ class Elastic:
             self._sleep(1)
         raise RuntimeError(f"{region} did not join the cluster")
 
-    def _drain(self, op: Operation, topo: Topology, names: list[str]) -> None:
+    def _drain(self, op: Operation, topo: Topology, names: list[str], settling: tuple[str, ...] = ()) -> None:
+        """Decommission `names` and wait for their replicas to move. `settling`: refusal texts that mean the cluster is
+        still catching up with a change just made (a dropped region still named by placement rules), worth waiting out."""
         rows = self._query("SELECT n.node_id, n.address FROM crdb_internal.gossip_nodes n "
                            "JOIN crdb_internal.gossip_liveness l USING (node_id) WHERE l.membership = 'active'",
                            exclude=names)
@@ -323,7 +330,7 @@ class Elastic:
         host = survivors[0]
         if ids:
             self._ops.step(op, f"Decommissioning {', '.join(names)}")
-            self._decommission(host, topo, ids, "none", op=op)
+            self._decommission(host, topo, ids, "none", op=op, settling=settling)
             label = names[0] if len(names) == 1 else f"{len(names)} nodes"
             for i in range(DRAIN_ATTEMPTS):
                 left = int(self._query("SELECT COALESCE(sum(ranges), 0) FROM crdb_internal.gossip_nodes "
@@ -334,7 +341,7 @@ class Elastic:
                 self._sleep(1)
             else:
                 raise RuntimeError(f"replicas did not drain from {label}; check the DB Console")
-            self._decommission(host, topo, ids, "all")
+            self._decommission(host, topo, ids, "all", settling=settling)
         self._ops.step(op, "Releasing capacity")
         if self._chaos is not None:
             self._chaos.forget(names)
@@ -342,7 +349,8 @@ class Elastic:
             self._docker.stop(name)
             self._docker.remove(name)
 
-    def _decommission(self, host: str, topo: Topology, ids: list[str], wait: str, op: Operation | None = None) -> None:
+    def _decommission(self, host: str, topo: Topology, ids: list[str], wait: str, op: Operation | None = None,
+                      settling: tuple[str, ...] = ()) -> None:
         cmd = ["/cockroach/cockroach", "node", "decommission", *ids, f"--wait={wait}", "--insecure",
                f"--host={host}:26257", f"--cluster-name={topo.cluster_id}"]
         for attempt in range(SETTLE_ATTEMPTS):
@@ -350,9 +358,12 @@ class Elastic:
             if proc.returncode == 0:
                 return
             output = (proc.stderr or proc.stdout).strip()
-            # Right after chaos, a restarted node's store is "suspect" and the pre-check refuses until it settles.
-            if not any(marker in output for marker in TRANSIENT_REFUSALS) or attempt == SETTLE_ATTEMPTS - 1:
+            # Right after chaos, a restarted node's store is "suspect" and the pre-check refuses until it settles;
+            # right after DROP REGION, placement rules name the region for a few seconds more.
+            catching_up = any(marker in output for marker in settling)
+            if not (catching_up or any(marker in output for marker in TRANSIENT_REFUSALS)) or attempt == SETTLE_ATTEMPTS - 1:
                 raise RuntimeError(f"decommission refused: {output}")
             if op is not None and attempt == 0:
-                self._ops.step(op, "Waiting for recently restarted nodes to settle before moving replicas")
+                self._ops.step(op, "Waiting for the placement rules to drop the region" if catching_up else
+                               "Waiting for recently restarted nodes to settle before moving replicas")
             self._sleep(5)

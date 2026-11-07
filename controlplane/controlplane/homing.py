@@ -32,7 +32,8 @@ def workers_by_region(workers: int, regions: Sequence[str]) -> dict[str, int]:
 
 def region_order(home: str, regions: Sequence[dict]) -> list[str]:
     """Home first, then the other regions nearest first. Regions without coordinates come after those with them,
-    the primary region first among them, then in the order given."""
+    the primary region first among them, then in the order given. Tie-breakers come last whatever their distance:
+    they hold copies to vote, not to serve clients."""
     by_name = {r["name"]: r for r in regions}
     origin = (by_name.get(home) or {}).get("location")
     others = [r for r in regions if r["name"] != home]
@@ -40,9 +41,10 @@ def region_order(home: str, regions: Sequence[dict]) -> list[str]:
     def key(item):
         index, r = item
         loc = r.get("location")
+        last = bool(r.get("tie_breaker"))
         if origin and loc:
-            return (0, distance_km(origin, loc), index)
-        return (1, 0 if r.get("primary") else 1, index)
+            return (last, 0, distance_km(origin, loc), index)
+        return (last, 1, 0 if r.get("primary") else 1, index)
 
     return [home] + [r["name"] for _, r in sorted(enumerate(others), key=key)]
 

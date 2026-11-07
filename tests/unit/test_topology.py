@@ -77,7 +77,10 @@ def test_auto_survival_goal(counts, expected):
 def test_explicit_goal_that_cannot_be_satisfied_produces_a_warning():
     t = parse({"survival_goal": "zone", "regions": [{"name": f"r{i}", "nodes": 1} for i in range(3)]})
     assert t.survival_goal == "zone"
-    assert any("ZONE survival needs 3+ nodes in the primary region" in w for w in t.warnings)
+    assert any("ZONE survival needs 3+ nodes in every region" in w for w in t.warnings)
+    # a third node in the primary alone isn't enough: each region's payments keep their three copies at home
+    t = parse({"survival_goal": "zone", "regions": [{"name": "r0", "nodes": 3}, {"name": "r1", "nodes": 2}, {"name": "r2", "nodes": 3}]})
+    assert any("ZONE survival needs 3+ nodes in every region" in w and "r1" in w for w in t.warnings)
 
 
 def test_first_region_becomes_primary_when_none_is_marked():
@@ -167,3 +170,67 @@ def test_deployment_model_is_validated():
     from controlplane.topology import PresetError, load_preset as lp
     with pytest.raises(PresetError, match="deployment model"):
         lp(ROOT / "presets", "aws", CATALOG, default_version="v26.3.2", subnet="10.77.0.0/16", max_nodes=15, model="two-dc")
+
+
+def stretch():
+    return {"display_name": "Global Payments", "cluster_id": "global-payments", "regions": [
+        {"name": "us-east-1", "provider": "aws", "nodes": 2, "primary": True},
+        {"name": "eastus", "provider": "azure", "nodes": 2, "secondary": True},
+        {"name": "us-east4", "provider": "gcp", "nodes": 1, "tie_breaker": True},
+    ]}
+
+
+def test_a_tie_breaker_region_is_marked_and_the_others_are_not():
+    t = parse(stretch())
+    assert [r.name for r in t.tie_breakers] == ["us-east4"]
+    assert [r.name for r in t.regions if not r.tie_breaker] == ["us-east-1", "eastus"]
+    assert t.survival_goal == "region" and not t.warnings
+
+
+def test_the_stretch_preset_ships_2_aws_2_azure_and_a_gcp_tie_breaker_in_one_metro():
+    t = load_preset(ROOT / "presets", "stretch", CATALOG, **KW)
+    assert [(r.name, r.provider, r.nodes, r.primary, r.secondary, r.tie_breaker) for r in t.regions] == [
+        ("us-east-1", "aws", 2, True, False, False), ("eastus", "azure", 2, False, True, False),
+        ("us-east4", "gcp", 1, False, False, True)]
+    assert t.survival_goal == "region"
+
+
+@pytest.mark.parametrize("index, extra, message", [
+    (0, {"tie_breaker": True}, "the tie-breaker can't be the primary region"),
+    (1, {"tie_breaker": True}, "the tie-breaker can't be the secondary region"),
+    (1, {"tie_breaker": True, "secondary": False}, "needs two regions besides the tie-breaker"),
+])
+def test_tie_breaker_roles_that_cannot_work_are_refused(index, extra, message):
+    data = stretch()
+    data["regions"][index] = {**data["regions"][index], **extra}
+    with pytest.raises(PresetError, match=re.escape(message)):
+        parse(data)
+
+
+def test_a_tie_breaker_only_matters_under_region_survival():
+    t = parse({**stretch(), "survival_goal": "zone"})
+    assert any("tie-breaker" in w for w in t.warnings)
+
+
+def test_the_single_region_model_leaves_the_tie_breaker_out():
+    t = parse_preset("t", stretch(), CATALOG, model="single-region", **KW)
+    assert t.tie_breakers == () and [r.name for r in t.regions] == ["us-east-1"]
+
+
+def test_saved_topologies_keep_the_tie_breaker_and_older_ones_still_load():
+    from controlplane.state import topology_from_dict, topology_to_dict
+    t = parse(stretch())
+    assert topology_from_dict(topology_to_dict(t)) == t
+    old = topology_to_dict(t)
+    for r in old["regions"]:
+        r.pop("tie_breaker")
+    assert topology_from_dict(old).tie_breakers == ()
+
+
+def test_the_residency_preset_is_three_regions_of_three_nodes():
+    # three regions so the cluster itself survives losing one; three nodes each so a domiciled row keeps all three
+    # copies at home, one per availability zone
+    t = load_preset(ROOT / "presets", "residency", CATALOG, **KW)
+    assert [(r.name, r.nodes, len({n.zone for n in t.nodes if n.region == r.name})) for r in t.regions] == [
+        ("us-east-1", 3, 3), ("eu-west-1", 3, 3), ("ap-southeast-1", 3, 3)]
+    assert t.survival_goal == "region"

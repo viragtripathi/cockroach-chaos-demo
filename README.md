@@ -10,7 +10,7 @@ puts a global load balancer in front of it, and gives you:
   realistic latency between regions
 - **elasticity**: add or decommission nodes, add or remove regions, switch survival goals, all live
 - a built-in **Payments** workload with a $10,000,000 invariant, plus Banko AI Assistant support
-- eleven guided **scenarios**, a **booth mode** with hardware triggers, and a **motion explainer**
+- thirteen guided **scenarios**, a **booth mode** with hardware triggers, and a **motion explainer**
 
 ![The stage during a primary-region outage: us-east-1 down, 4 of 6 nodes live, no unavailable ranges, $0 lost, payments recovered in 8.1 s](docs/images/stage-region-outage.png)
 
@@ -95,6 +95,8 @@ model, then rebuild). Adding a region to a single-region cluster turns it multi-
 | `ibm` | us-south (2), us-east (2), eu-de (2) | region |
 | `multi-cloud` | aws us-east-1 (2), gcp us-central1 (2), azure westus2 (2) | region |
 | `classic` | us-east-1 (2), us-west-2 (2), us-east-2 (1) | region |
+| `stretch` | aws us-east-1 (2), azure eastus (2), gcp us-east4 (1, tie-breaker), all in Virginia | region |
+| `residency` | us-east-1 (3), eu-west-1 (3), ap-southeast-1 (3), for data domiciling | region |
 | `small` | us-east-1, us-west-2, eu-west-1 (1 each), for 8 GB laptops | none (plain 3× replication) |
 
 Make your own in the presenter console (Cluster → Custom preset), or copy a file in `presets/` to
@@ -113,6 +115,85 @@ regions:
 
 Real zone names, cities and map coordinates come from `catalog/regions.yaml`; unknown regions work too.
 Latency between regions follows their distance. Up to 15 nodes by default (`MAX_NODES`).
+
+## Stretch cluster with a tie-breaker
+
+    ./run.sh up --preset stretch
+
+Two clouds serve every payment and a third site only votes: 2 AWS nodes in `us-east-1`, 2 Azure nodes in `eastus`
+and 1 GCP node in `us-east4`, all in Virginia, a few milliseconds apart. Every range keeps 5 copies, one on each
+node, so losing a whole cloud still leaves 3 of 5: a majority. The GCP node is the **tie-breaker**: it holds a copy of
+everything and leads nothing busy, so losing it changes nothing. The stage labels it, and its heartbeat beats full
+height (it holds every range) but slowly (no traffic goes through it).
+
+What the panel configures, on both databases (`chaos` and `defaultdb`):
+
+```sql
+ALTER DATABASE chaos SET PRIMARY REGION "us-east-1";        -- AWS leads in normal times
+ALTER DATABASE chaos ADD REGION IF NOT EXISTS "eastus";     -- Azure
+ALTER DATABASE chaos ADD REGION IF NOT EXISTS "us-east4";   -- GCP, the tie-breaker
+ALTER DATABASE chaos SET SECONDARY REGION "eastus";         -- if AWS goes, Azure leads
+ALTER DATABASE chaos SURVIVE REGION FAILURE;                -- 5 copies: losing any one site leaves a majority
+-- System leases stay off the tie-breaker (same for RANGE default, RANGE liveness, RANGE system, DATABASE system):
+ALTER RANGE meta CONFIGURE ZONE USING lease_preferences = '[[-region=us-east4]]';
+```
+
+The Payments workload homes its accounts and workers only in AWS and Azure, and a worker whose cloud goes down fails
+over to the other serving cloud, never to the tie-breaker, even though it is nearer. Nothing is homed in the
+tie-breaker because CockroachDB always leads a region's own regional data from that region.
+
+Mark any region `tie_breaker: true` in your own preset. It can't be the primary or secondary region, and the cluster
+needs two serving regions besides it. The **Stretch cluster: lose a whole cloud** scenario takes AWS down (payments
+continue on Azure, $0 lost), brings it back, then takes the tie-breaker down (recovery time stays at 0 s). Bringing
+AWS back finishes only once its nodes are live and caught up, about 15 s: until then the tie-breaker's vote is still
+needed, so the next step waits for it (and says why).
+
+## Data domiciling
+
+    ./run.sh up --preset residency      # 9 nodes: give the Docker/Podman VM about 11 GB
+
+Customers in the US, the EU and Asia Pacific, in one table, each kept in their home region: three regions
+(`us-east-1`, `eu-west-1`, `ap-southeast-1`) with three nodes each. Three regions so the cluster itself survives
+losing one: with two, one region always holds the majority of the cluster's own data, and losing it would stop every
+region. Three nodes each so a domiciled row keeps all three copies at home, one per availability zone. Payments runs
+across all three regions with REGION survival, as on the other presets.
+
+The **Data domiciling** scenario builds a `residency` database of its own:
+
+1. **By default** each customer's row keeps 3 copies at home and a read-only copy in every other region, for fast
+   reads there: copies sit outside their home region.
+2. **One super region per region** (CockroachDB's recommended way to domicile data): 0 copies outside, checked on
+   every range that holds a customer.
+3. **A node in ap-southeast-1 goes down**: the Singapore customer's row is still written (2 of 3 copies are at home),
+   and nothing is copied abroad to replace the third.
+4. **All of ap-southeast-1 goes down**: US and EU customers keep working and Payments recovers in seconds; the
+   Singapore customer waits for her region, because no copy of her data exists anywhere else. That is the trade.
+
+```sql
+CREATE DATABASE residency PRIMARY REGION "us-east-1" REGIONS "eu-west-1", "ap-southeast-1" SURVIVE ZONE FAILURE;
+CREATE TABLE residency.customers (..., PRIMARY KEY (crdb_region, id)) LOCALITY REGIONAL BY ROW;
+SET enable_super_regions = 'on';   -- required on v25, accepted and no longer needed on v26
+ALTER DATABASE residency ADD SUPER REGION "americas" VALUES "us-east-1";
+ALTER DATABASE residency ADD SUPER REGION "europe" VALUES "eu-west-1";
+ALTER DATABASE residency ADD SUPER REGION "asia_pacific" VALUES "ap-southeast-1";
+```
+
+No secondary region on this database: CockroachDB doesn't support one together with domiciling. Surviving a whole-region
+outage while staying inside the border takes three regions in the super region (for example three EU regions).
+
+**Placement is enforced by moving copies, not at write time.** A newly created table's first range starts on whatever
+nodes held the range next to it, possibly in another region, and CockroachDB then moves it home: on a test cluster an
+EU row sat in the US and Singapore for about 80 seconds after its table was created, then all three copies moved to
+`eu-west-1`. Once placed, copies stay home, even when a node dies. So create domiciled tables, and check their
+placement as the scenario does, before loading personal data into them.
+
+**Why the keys are random UUIDs.** CockroachDB finds a row through range descriptors: each range records the key where
+it starts and ends, and as a table grows its ranges split at real keys taken from its rows. Those descriptors live in
+the cluster's meta ranges, which are replicated across regions whatever the super regions say (they describe the whole
+cluster), and any node that routes a query to a range caches its descriptor. So the key values at split points can be
+read outside their home region: primary keys, and the indexed columns of secondary indexes. A random UUID reveals
+nothing; never key or index a domiciled table on national IDs, email addresses or other personal data. CockroachDB's
+documentation lists what else domiciling doesn't cover (GLOBAL tables, logs).
 
 ## Chaos and elasticity
 
@@ -163,14 +244,19 @@ Start one from the presenter console; the stage shows a guided card and you adva
 | Tier 1: resilience and multi-region | Tier 2: transactions and operations |
 |---|---|
 | Survive a region outage | Isolation levels: real write skew |
-| ZONE vs REGION survival | Online schema change under load |
-| Elastic scale | Changefeeds that survive failure |
-| REGIONAL BY ROW (latency heatmap) | Split-brain test |
-| Follower reads | Time travel (undo an accidental DELETE) |
+| Stretch cluster: lose a whole cloud | Online schema change under load |
+| ZONE vs REGION survival | Changefeeds that survive failure |
+| Elastic scale | Split-brain test |
+| REGIONAL BY ROW (latency heatmap) | Time travel (undo an accidental DELETE) |
+| Follower reads | |
 | GLOBAL tables | |
+| Data domiciling | |
 
 Scenarios check their requirements (for example, 3 regions and latency on) and clean up their tables when you end them.
-ZONE vs REGION survival needs 3 nodes in the primary region: on the 6-node presets, add one with **+ Node** first.
+ZONE vs REGION survival needs 3 nodes in every region, because ZONE survival keeps each region's payments at home: the
+`residency` preset has them; on the 6-node presets, add one node per region first. It pauses cross-region transfers
+while ZONE survival is on: a transfer to a customer in the lost region waits for that region, and each Payments worker
+sends one transfer at a time, so those would hold up every region's payments. REGION survival turns them back on.
 
 ## Booth mode
 

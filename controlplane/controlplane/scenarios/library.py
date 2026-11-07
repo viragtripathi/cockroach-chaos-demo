@@ -5,8 +5,9 @@ import math
 import threading
 import uuid
 
-from ..bootstrap import _literal
-from ..retry import backoff_delay
+from ..bootstrap import _ident, _literal
+from ..explainers import PROVIDER_LABEL
+from ..retry import abandon_after, backoff_delay
 from . import Context, Scenario, ScenarioError, Step
 
 CDC_PORT = 8443
@@ -62,9 +63,12 @@ def _wait_recovery(ctx: Context, timeout: float = 90) -> dict:
     except Exception:
         pass
     lost = status["money_lost"]
+    failure_at = status.get("failure_at")  # retries from the failure on: not the ones a failure before it caused
+    history = status["history"]
+    since = [h for h in history if h.get("ts", 0) >= int(failure_at)] if failure_at else history[-60:]
     return {"Recovery time": "still recovering" if status["recovery_s"] is None else f"{status['recovery_s']:.0f} s",
             "Money lost": "–" if lost is None else f"${lost:,}",
-            "Transfers retried": sum(h["retries"] for h in status["history"][-60:])}
+            "Transfers retried": sum(h["retries"] for h in since)}
 
 
 def _commits_last(ctx: Context, seconds: int) -> int:
@@ -78,15 +82,78 @@ def _set_goal(ctx: Context, goal: str) -> None:
         ctx.wait_operation()
 
 
-def _wait_replicated(ctx: Context, timeout: float = 300) -> float:
-    started = ctx.clock()
+# CockroachDB writes each store's status (what kv_store_status reads) every 10 s: a restarted node gets this long for
+# its own and its peers' next status to count it again before the counts are trusted
+REJOIN_S = 15
+
+
+def _not_whole(ctx: Context) -> str | None:
+    """What still keeps the cluster from being whole, or None: every node live and up long enough for the store
+    status to count it, and no range unavailable, missing a copy, or waiting for a snapshot to catch a copy up."""
+    rows = ctx.query("SELECT address, is_live, extract(epoch FROM now() - started_at) FROM crdb_internal.gossip_nodes "
+                     "ORDER BY node_id")
+    # by name: a name that was decommissioned and added again keeps its newest node
+    nodes = {str(a).rsplit(":", 1)[0]: (bool(live), float(up or 0)) for a, live, up in rows}
+    names = [n.name for n in ctx.topo.nodes]
+    down = [n for n in names if not nodes.get(n, (False, 0.0))[0]]
+    if down:
+        return f"{', '.join(down)} not live yet"
+    rejoining = [n for n in names if nodes[n][1] < REJOIN_S]
+    if rejoining:
+        return f"{', '.join(rejoining)} just rejoined"
+    unavailable, missing, waiting = ctx.query(
+        "SELECT COALESCE(sum((metrics->>'ranges.unavailable')::FLOAT), 0), "
+        "COALESCE(sum((metrics->>'ranges.underreplicated')::FLOAT), 0), "
+        "COALESCE(sum((metrics->>'queue.raftsnapshot.pending')::FLOAT), 0) FROM crdb_internal.kv_store_status",
+        one=True)
+    if unavailable:
+        return f"{unavailable:.0f} ranges unavailable"
+    if missing:
+        return f"{missing:.0f} ranges still missing a copy"
+    if waiting:
+        return f"{waiting:.0f} copies waiting for a snapshot"
+    return None
+
+
+def _wait_whole(ctx: Context, budget: float, calm: int = 2) -> float:
+    """Seconds until the cluster is whole on `calm` checks in a row; ScenarioError once the budget is spent."""
+    started, streak, behind = ctx.clock(), 0, "not checked yet"
+    while True:
+        try:
+            behind = _not_whole(ctx)
+        except Exception as e:  # a node that is still starting can refuse the query
+            behind = str(e)
+        streak = streak + 1 if behind is None else 0
+        if streak >= calm:
+            return ctx.clock() - started
+        if ctx.clock() - started >= budget:
+            raise ScenarioError(f"still catching up after {budget:.0f} s: {behind}")
+        ctx.sleep(2)
+
+
+def _wait_spread(ctx: Context, tables=("accounts", "transfers"), timeout: float = 300) -> float:
+    """Wait for REGION survival placement of the Payments tables: every range keeps a majority of its voting replicas
+    after losing any one region. Read from the ranges themselves: the under-replicated counter refreshes every 10 s,
+    so right after the ALTER it still reads 0 while nothing has moved."""
+    started, short = ctx.clock(), "not checked yet"
     while ctx.clock() - started < timeout:
-        row = ctx.query("SELECT COALESCE(sum((metrics->>'ranges.underreplicated')::FLOAT), 0) FROM crdb_internal.kv_store_status",
-                        one=True)
-        if not row[0]:
+        where = _node_regions(ctx)
+        regions = set(where.values())
+        short = None
+        for table in tables:
+            rows = ctx.query(f"SELECT range_id, voting_replicas FROM [SHOW RANGES FROM TABLE {table} WITH DETAILS]")
+            for range_id, voters in rows:
+                homes = [where.get(int(v)) for v in voters]
+                lost = next((r for r in regions if 2 * sum(h != r for h in homes) <= len(homes)), None)
+                if lost:
+                    short = f"{table} range {range_id} can't lose {lost} yet"
+                    break
+            if short:
+                break
+        if short is None:
             return ctx.clock() - started
         ctx.sleep(3)
-    raise ScenarioError("replicas are still moving; check the DB Console")
+    raise ScenarioError(f"replicas are still spreading across regions ({short}); try again in a minute")
 
 
 def _node_regions(ctx: Context) -> dict[int, str]:
@@ -125,6 +192,13 @@ def _recover(region_key: str | None = None, settle: float = 0):
             ctx.chaos.recover_all()
         ctx.sleep(settle)
         return {"Recovered": state[region_key] if region_key else "everything"}
+    return act
+
+
+def _recover_node(key: str):
+    def act(ctx: Context, state: dict) -> dict:
+        ctx.chaos.act("recover", "node", state[key])
+        return {"Recovered": state[key]}
     return act
 
 
@@ -208,6 +282,280 @@ SURVIVE = Scenario(
 )
 
 
+# -- 1a. stretch cluster: two clouds serve, a third only votes ---------------------------------------------------
+
+def _stretch_prepare(ctx: Context, state: dict) -> None:
+    _base_state(ctx, state)
+    topo = ctx.topo
+    serving = [r for r in topo.regions if not r.tie_breaker and not r.primary]
+    second = topo.secondary or serving[0]
+    tie = topo.tie_breakers[0]
+    cloud = lambda r: PROVIDER_LABEL.get(r.provider, r.provider)  # noqa: E731
+    state.update(secondary=second.name, tie=tie.name, primary_cloud=cloud(topo.primary), secondary_cloud=cloud(second),
+                 tie_cloud=cloud(tie))
+    _set_goal(ctx, "region")
+
+
+def _stretch_start(ctx: Context, state: dict) -> dict:
+    _ensure_payments(ctx)
+    workers = (ctx.workload.status().get("homing") or {}).get("workers") or {}
+    try:  # display only: how many ranges the tie-breaker holds a copy of
+        where = _node_regions(ctx)
+        rows = ctx.query("SELECT node_id, (metrics->>'replicas')::INT FROM crdb_internal.kv_store_status")
+        held = f"{sum(int(r[1] or 0) for r in rows if len(r) > 1 and where.get(int(r[0])) == state['tie'])} ranges"
+    except Exception:
+        held = "a copy of every range"
+    return {"Payments homed in": ", ".join(r for r in workers if r != state["tie"]) or f"{state['primary']}, {state['secondary']}",
+            f"Payments workers in {state['tie']}": workers.get(state["tie"], 0),
+            f"Copies held by {state['tie']}": held}
+
+
+def _stretch_back(ctx: Context, state: dict) -> dict:
+    """Restarting the containers takes a second; the step ends when the cluster is whole again, because losing the
+    tie-breaker next is harmless only once the primary cloud votes again with current copies."""
+    ctx.chaos.act("recover", "region", state["primary"])
+    took = _wait_whole(ctx, budget=180)
+    return {"Recovered": state["primary"], "Caught up in": f"{took:.0f} s"}
+
+
+def _stretch_tie_outage(ctx: Context, state: dict) -> dict:
+    try:
+        _wait_whole(ctx, budget=60, calm=1)
+    except ScenarioError as e:
+        raise ScenarioError(f"not yet, {e}: losing {state['tie']} now would leave too few copies for a majority") from e
+    result = ctx.chaos.act("outage", "region", state["tie"], confirm=True)
+    ctx.workload.mark_failure()
+    return {"Nodes down": len(result["targets"]), **_wait_recovery(ctx, timeout=60)}
+
+
+STRETCH = Scenario(
+    id="stretch-cloud", title="Stretch cluster: lose a whole cloud", tier=1, min_regions=3, min_nodes=5,
+    needs_tie_breaker=True,
+    summary="Two clouds serve every payment and a third only votes: lose a whole cloud with no data lost, "
+            "then lose the tie-breaker and nothing happens.",
+    prepare=_stretch_prepare, reset=lambda ctx, st: ctx.chaos.recover_all(),
+    steps=(
+        Step("Start payments", "{primary_cloud} and {secondary_cloud} serve every payment. {tie} only votes.",
+             _stretch_start, "Every range has a copy on all five nodes; leases live in {primary} and {secondary}"),
+        Step("Take down {primary}", "All of {primary_cloud} just went dark", _outage("primary"),
+             "Leases move to {secondary}; {tie} keeps the majority: 3 of 5 copies are left"),
+        Step("Measure the impact", "Payments keep committing on {secondary_cloud}. Not one dollar lost.",
+             _survive_measure, "Recovery time, money lost, unavailable ranges"),
+        Step("Bring {primary} back", "{primary_cloud} rejoins and catches up on its own", _stretch_back,
+             "Nodes come back live and catch up; leases drift back to {primary} over the next couple of minutes"),
+        Step("Take down {tie}", "Now the tie-breaker goes dark. Nothing has to fail over.", _stretch_tie_outage,
+             "It leads nothing with traffic: payments don't wait for it, so recovery time should stay at 0 s"),
+        Step("Bring {tie} back", "{tie} rejoins and takes its copies back", _recover("tie"),
+             "Five of five copies again"),
+        Step("Two at once", "Losing {primary_cloud} and the tie-breaker together leaves {secondary_cloud} alone, short of "
+             "a majority: writes would stop. The panel asks before it lets you do that.", None,
+             "This is why the third site matters, even with one node"),
+    ),
+)
+
+
+# -- 1c. data domiciling: each customer's data stays in their home region ----------------------------------------
+# Super regions (CockroachDB's recommended way to domicile data), one per region, on a database of the scenario's own
+# with ZONE survival: a domiciled row keeps all three copies in its home region, one per zone, so each such region
+# needs three nodes. No secondary region: it is not supported together with domiciling. The cluster needs three
+# regions or more: with two, one region always holds the majority of the cluster's own data, and losing it would stop
+# every region, the opposite of the story.
+
+CUSTOMERS = {"europe": [("Aoife", "Dublin"), ("Lukas", "Frankfurt"), ("Chiara", "Milan")],
+             "americas": [("Maya", "New York"), ("Diego", "Miami"), ("Grace", "Toronto")],
+             "asia_pacific": [("Mei", "Singapore"), ("Arjun", "Mumbai"), ("Hana", "Tokyo")]}
+
+
+def _continent(region) -> str | None:
+    if not region.location:
+        return None
+    lat, lon = region.location
+    if -170 <= lon <= -30:
+        return "americas"
+    if -25 <= lon <= 45 and lat >= 34:
+        return "europe"
+    if lon > 60:
+        return "asia_pacific"
+    return None
+
+
+def _domiciled(topo) -> list:
+    """Regions that can keep all three copies of a row at home, the primary first."""
+    big = [r for r in topo.regions if sum(n.region == r.name for n in topo.nodes) >= 3]
+    return sorted(big, key=lambda r: not r.primary)
+
+
+def _residency_check(topo) -> list[str]:
+    if len(topo.regions) >= 3 and len(_domiciled(topo)) >= 2:
+        return []
+    return ["needs 3+ regions, two of them with 3 nodes each: build the residency preset"]
+
+
+def _domicile_prepare(ctx: Context, state: dict) -> None:
+    _base_state(ctx, state)
+    regions = _domiciled(ctx.topo)
+    home = regions[0]
+    abroad = max(regions[1:], key=lambda r: (_distance(home, r), r.index))
+    supers = [_continent(r) for r in regions]
+    if None in supers or len(set(supers)) < len(supers):
+        supers = [r.name for r in regions]  # unknown or shared continents: name each super region after its region
+    people = {r.name: CUSTOMERS.get(_continent(r) or "", [("Alex", r.label), ("Sam", r.label), ("Kim", r.label)])
+              for r in regions}
+    labels = [r.label for r in regions]
+    state.update(regions=[r.name for r in regions], supers=dict(zip([r.name for r in regions], supers)), people=people,
+                 region_list=", ".join(labels[:-1]) + f" and {labels[-1]}", abroad=abroad.name,
+                 abroad_label=abroad.label, abroad_customer=people[abroad.name][0][0],
+                 victim=[n.name for n in ctx.topo.nodes if n.region == abroad.name][-1])
+
+
+def _ranges(ctx: Context, state: dict) -> dict:
+    """range id -> (home region, region of each copy), for every range that holds a customer."""
+    out = {}
+    for region in state["regions"]:
+        for name, _ in state["people"][region]:
+            row = ctx.query(f"SELECT range_id, replica_localities FROM [SHOW RANGE FROM TABLE residency.customers FOR ROW "
+                            f"({_literal(region)}, (SELECT id FROM residency.customers WHERE crdb_region = "
+                            f"{_literal(region)} AND name = {_literal(name)}))]", one=True)
+            if row and len(row) > 1 and isinstance(row[1], (list, tuple)):
+                out[row[0]] = (region, [loc.split("region=", 1)[1].split(",", 1)[0] for loc in row[1] if "region=" in loc])
+    return out
+
+
+def _where(home: str, copies: list[str]) -> str:
+    """'3 in eu-west-1, 2 outside': copies at home, and how many sit in other regions."""
+    if not copies:
+        return "unknown"
+    outside = sum(r != home for r in copies)
+    return f"{copies.count(home)} in {home}, {outside or 'none'} outside"
+
+
+def _placement(ctx: Context, state: dict, settled, attempts: int = 40) -> dict:
+    """Copies outside their home region across every customer's range, once `settled(home, copies)` holds for all of
+    them (or the attempts run out: the result then says what it sees), and where one customer per region lives."""
+    for _ in range(attempts):
+        ranges = _ranges(ctx, state)
+        if ranges and all(settled(home, copies) for home, copies in ranges.values()):
+            break
+        ctx.sleep(3)
+    outside = sum(sum(r != home for r in copies) for home, copies in ranges.values())
+    first = {}
+    for home, copies in ranges.values():
+        first.setdefault(home, copies)
+    result = {"Copies outside their home region": str(outside), "Data ranges checked": len(ranges)}
+    for region in state["regions"]:
+        name, city = state["people"][region][0]
+        result[f"{name} ({city})"] = _where(region, first.get(region, []))
+    return result
+
+
+def _write(ctx: Context, region: str, name: str, seconds: float = 6) -> str:
+    """One write to a customer's row, given up after `seconds` (a row whose region is down would wait for it)."""
+    conn = None
+    try:
+        conn = ctx.connect()
+        with abandon_after(conn, seconds):
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE residency.customers SET last_seen = now() WHERE crdb_region = {_literal(region)} "
+                            f"AND name = {_literal(name)}")
+        return "committed"
+    except Exception:
+        return f"waits for {region}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _domicile_start(ctx: Context, state: dict) -> dict:
+    _ensure_payments(ctx)
+    regions = state["regions"]
+    rows = ", ".join(f"({_literal(r)}, {_literal(name)}, {_literal(city)})" for r in regions for name, city in state["people"][r])
+    ctx.run(["DROP DATABASE IF EXISTS residency CASCADE",
+             f"CREATE DATABASE residency PRIMARY REGION {_ident(regions[0])} REGIONS "
+             f"{', '.join(_ident(r) for r in regions[1:])} SURVIVE ZONE FAILURE",
+             "USE residency",  # crdb_internal_region resolves in the current database: it must be residency's
+             "CREATE TABLE residency.customers (crdb_region crdb_internal_region NOT NULL, id UUID NOT NULL DEFAULT "
+             "gen_random_uuid(), name STRING NOT NULL, city STRING NOT NULL, last_seen TIMESTAMPTZ NOT NULL DEFAULT now(), "
+             "PRIMARY KEY (crdb_region, id)) LOCALITY REGIONAL BY ROW",
+             f"INSERT INTO residency.customers (crdb_region, name, city) VALUES {rows}"])
+    return _placement(ctx, state, lambda home, copies: _default_placed(home, copies, regions))
+
+
+def _default_placed(home: str, copies: list[str], regions: list[str]) -> bool:
+    """The default once placed: three copies at home and one read-only copy per other region, for fast reads there.
+    Which region holds each read-only copy can take minutes to even out; the count is what matters here."""
+    return copies.count(home) == 3 and len(copies) == 3 + len(regions) - 1
+
+
+def _domicile_restrict(ctx: Context, state: dict) -> dict:
+    # v25 needs the session setting for super regions; v26 accepts it and no longer needs it
+    ctx.run(["SET enable_super_regions = 'on'"] +
+            [f'ALTER DATABASE residency ADD SUPER REGION "{state["supers"][r]}" VALUES {_ident(r)}' for r in state["regions"]],
+            idempotent=False)
+    return _placement(ctx, state, lambda home, copies: len(copies) == 3 and all(r == home for r in copies))
+
+
+def _domicile_node_down(ctx: Context, state: dict) -> dict:
+    ctx.chaos.act("crash", "node", state["victim"], confirm=True)
+    ctx.sleep(2)
+    name, abroad = state["abroad_customer"], state["abroad"]
+    ranges = {k: v for k, v in _ranges(ctx, state).items() if v[0] == abroad}
+    return {f"Write to {name} with {state['victim']} down": _write(ctx, abroad, name, seconds=20),
+            f"Copies of {state['abroad_label']}'s customers outside it": str(sum(r != abroad for _, c in ranges.values() for r in c))}
+
+
+def _domicile_region_down(ctx: Context, state: dict) -> dict:
+    ctx.chaos.act("outage", "region", state["abroad"], confirm=True)
+    ctx.workload.mark_failure()
+    ctx.sleep(3)
+    writes = {f"{state['people'][r][0][0]} ({r})": _write(ctx, r, state["people"][r][0][0]) for r in state["regions"]}
+    payments = _wait_recovery(ctx)
+    return {**writes, "Payments": f"recovered in {payments['Recovery time']}, {payments['Money lost']} lost"}
+
+
+def _domicile_region_back(ctx: Context, state: dict) -> dict:
+    abroad, name = state["abroad"], state["abroad_customer"]
+    ctx.chaos.act("recover", "region", abroad)
+    for _ in range(40):
+        if _write(ctx, abroad, name) == "committed":
+            return {f"{name} ({abroad})": "committed again"}
+        ctx.sleep(3)
+    return {f"{name} ({abroad})": "still waiting"}
+
+
+def _domicile_reset(ctx: Context, state: dict) -> None:
+    ctx.chaos.recover_all()
+    ctx.run("DROP DATABASE IF EXISTS residency CASCADE")
+
+
+DOMICILE = Scenario(
+    id="data-domicile", title="Data domiciling: keep each customer's data at home", tier=1, min_regions=3, min_nodes=6,
+    check=_residency_check,
+    summary="One table, customers in three regions: super regions keep every copy of a customer's data in their home "
+            "region; losing a region pauses only its own customers.",
+    prepare=_domicile_prepare, reset=_domicile_reset,
+    steps=(
+        Step("Create customers", "One table, customers in {region_list}. By default each row also keeps a read-only copy "
+             "in every other region.", _domicile_start,
+             "Copies outside their home region: one per other region, for fast reads everywhere"),
+        Step("Keep data at home", "Each region is its own super region: a customer's data never leaves their region.",
+             _domicile_restrict, "Copies outside their home region: 0, across every range that holds a customer"),
+        Step("Lose a node in {abroad}", "A node in {abroad} goes down. {abroad_customer}'s row is still written there.",
+             _domicile_node_down, "Two of three copies are still at home, one per zone. Nothing is copied abroad to "
+             "replace the third."),
+        Step("Bring {victim} back", "{victim} rejoins and the third copy is home again", _recover_node("victim"),
+             "Three copies in {abroad} again"),
+        Step("Lose all of {abroad}", "All of {abroad} goes dark. Its customers wait for it; everyone else keeps working.",
+             _domicile_region_down, "No copy of {abroad_label}'s customers exists elsewhere, by design. Payments run in "
+             "every region and recover in seconds."),
+        Step("Bring {abroad} back", "{abroad} is back and its customers can be written again", _domicile_region_back,
+             "The trade: domiciled rows survive a node or a zone, not the loss of their whole region"),
+    ),
+)
+
+
 # -- 1b. survive a zone outage (the single-region headline) ------------------------------------------------------
 
 def _zone_prepare(ctx: Context, state: dict) -> None:
@@ -241,11 +589,17 @@ SURVIVE_ZONE = Scenario(
 # -- 2. ZONE vs REGION survival ---------------------------------------------------------------------------------
 
 def _zone_step(ctx: Context, state: dict) -> dict:
+    # Under ZONE survival a transfer to a customer in a lost region waits for that region, and each Payments worker
+    # sends one transfer at a time: a few of those would hold up every region's payments behind them. They pause for
+    # the ZONE half; REGION survival brings them back.
+    state.setdefault("cross_region_pct", ctx.workload.cross_region_pct)
+    ctx.workload.set_cross_region(0)
     _set_goal(ctx, "zone")
     _ensure_payments(ctx)
     took = _wait_voters(ctx, state["primary"])
     return {"Survival goal": "ZONE", "Voting replicas": "3 per partition, all in the partition's home region",
-            "Placed in": f"{took:.0f} s"}
+            "Placed in": f"{took:.0f} s",
+            "Cross-region transfers": "paused: one to a customer in a lost region would wait for that region"}
 
 
 def _stall(ctx: Context, state: dict) -> dict:
@@ -265,8 +619,16 @@ def _stall(ctx: Context, state: dict) -> dict:
 
 def _region_step(ctx: Context, state: dict) -> dict:
     _set_goal(ctx, "region")
-    took = _wait_replicated(ctx)
-    return {"Survival goal": "REGION", "Rebalanced in": f"{took:.0f} s"}
+    took = _wait_spread(ctx)
+    pct = state.get("cross_region_pct", ctx.workload.cross_region_pct)
+    ctx.workload.set_cross_region(pct)
+    return {"Survival goal": "REGION", "Rebalanced in": f"{took:.0f} s", "Cross-region transfers": f"back on: {pct}%"}
+
+
+def _zone_reset(ctx: Context, state: dict) -> None:
+    ctx.chaos.recover_all()
+    if "cross_region_pct" in state:  # ended during the ZONE half
+        ctx.workload.set_cross_region(state["cross_region_pct"])
 
 
 def _survive_again(ctx: Context, state: dict) -> dict:
@@ -278,10 +640,21 @@ def _survive_again(ctx: Context, state: dict) -> dict:
     return out
 
 
+def _zone_check(topo) -> list[str]:
+    """Under ZONE survival each region's payments keep all three voters at home: every region that homes them needs
+    three nodes, not only the primary."""
+    short = [(r.name, sum(n.region == r.name for n in topo.nodes)) for r in topo.regions if not r.tie_breaker]
+    short = [(name, count) for name, count in short if count < 3]
+    if not short:
+        return []
+    return [f"needs 3 nodes in every region, since ZONE survival keeps each region's payments at home "
+            f"({short[0][0]} has {short[0][1]}): build the residency preset or add nodes"]
+
+
 ZONE_VS_REGION = Scenario(
-    id="zone-vs-region", title="ZONE vs REGION survival", tier=1, min_regions=3, min_nodes=5, min_primary_nodes=3,
+    id="zone-vs-region", title="ZONE vs REGION survival", tier=1, min_regions=3, min_nodes=5, check=_zone_check,
     summary="The same region outage, before and after one ALTER DATABASE statement.",
-    prepare=lambda ctx, st: _base_state(ctx, st), reset=lambda ctx, st: ctx.chaos.recover_all(),
+    prepare=lambda ctx, st: _base_state(ctx, st), reset=_zone_reset,
     steps=(
         Step("Switch to ZONE survival", "Survival goal: ZONE. Each partition's voters live in its home region.", _zone_step),
         Step("Take down {primary}", "Under ZONE survival, losing {primary} stalls the payments homed there", _stall,
@@ -763,4 +1136,4 @@ TIME_TRAVEL = Scenario(
 )
 
 
-ALL = [SURVIVE, SURVIVE_ZONE, ZONE_VS_REGION, ELASTIC, RBR, FOLLOWER, GLOBAL, SKEW, SCHEMA, CDC, SPLIT, TIME_TRAVEL]
+ALL = [SURVIVE, SURVIVE_ZONE, STRETCH, ZONE_VS_REGION, ELASTIC, RBR, FOLLOWER, GLOBAL, DOMICILE, SKEW, SCHEMA, CDC, SPLIT, TIME_TRAVEL]

@@ -6,7 +6,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 code { font-family: var(--mono); font-size: .92em; }
 
 .bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 14px; padding: 14px 20px; background: var(--bg); border-bottom: 1px solid var(--line); }
-.logo { height: 14px; }
+.logo { height: 25px; }  /* the 367x73 brandmark at the old lockup's ~126px width */
 [data-theme=light] .logo { filter: brightness(0); }
 .title { font-weight: 300; font-size: 20px; }
 .status { font-family: var(--mono); font-size: 12px; letter-spacing: 1px; color: var(--muted); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

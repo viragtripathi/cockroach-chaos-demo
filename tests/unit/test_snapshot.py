@@ -101,3 +101,13 @@ def test_a_reused_address_reports_the_newest_node():
 def test_snapshot_reports_the_deployment_model():
     snap = assemble_snapshot(TOPO, running(*[n.name for n in TOPO.nodes]), rows(), {"unavailable": 0, "underreplicated": 0}, None, 1.0)
     assert snap["cluster"]["model"] == "multi-region"
+
+
+def test_regions_say_which_one_is_the_tie_breaker():
+    stretch = load_preset(ROOT / "presets", "stretch", load_catalog(ROOT / "catalog" / "regions.yaml"),
+                          default_version="v26.3.2", subnet="10.77.0.0/16", max_nodes=15)
+    live = {n.name: True for n in stretch.nodes}
+    snap = assemble_snapshot(stretch, running(*live), [{"node_id": i + 1, "address": f"{n}:26257", "is_live": True,
+                                                        "ranges": 50, "leases": 10} for i, n in enumerate(live)],
+                             {"unavailable": 0, "underreplicated": 0}, None, 1.0)
+    assert [(r["name"], r["tie_breaker"]) for r in snap["regions"]] == [("us-east-1", False), ("eastus", False), ("us-east4", True)]

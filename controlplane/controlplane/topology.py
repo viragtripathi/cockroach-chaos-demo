@@ -34,6 +34,9 @@ class RegionSpec:
     primary: bool
     secondary: bool
     index: int  # 1-based; selects the region's /24
+    # Holds one copy of every range so that losing a whole region (or cloud) still leaves a majority, but homes no
+    # data and serves no clients: the third site of a two-cloud stretch cluster.
+    tie_breaker: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,10 @@ class Topology:
         return next((r for r in self.regions if r.secondary), None)
 
     @property
+    def tie_breakers(self) -> tuple[RegionSpec, ...]:
+        return tuple(r for r in self.regions if r.tie_breaker)
+
+    @property
     def image(self) -> str:
         return f"docker.io/cockroachdb/cockroach:{self.crdb_version}"
 
@@ -105,8 +112,14 @@ def survival_warnings(goal: str, regions) -> list[str]:
     if goal == "region" and (len(regions) < 3 or total < 5 or primary.nodes < 2):
         warnings.append("REGION survival needs 3+ regions, 5+ nodes and 2+ nodes in the primary region; "
                         "ranges will stay under-replicated")
-    if goal == "zone" and primary.nodes < 3:
-        warnings.append("ZONE survival needs 3+ nodes in the primary region; ranges will stay under-replicated")
+    short = [r.name for r in regions if r.nodes < 3 and not r.tie_breaker]
+    if goal == "zone" and short:  # each region's payments keep their three copies in that region
+        warnings.append(f"ZONE survival needs 3+ nodes in every region ({', '.join(short)} has fewer); "
+                        "ranges will stay under-replicated")
+    tie = [r.name for r in regions if r.tie_breaker]
+    if tie and goal != "region":
+        warnings.append(f"a tie-breaker only matters under REGION survival; under {goal.upper()} survival "
+                        f"{', '.join(tie)} just holds copies")
     return warnings
 
 
@@ -185,6 +198,7 @@ def parse_preset(name: str, data, catalog: Catalog, *, default_version: str, sub
             label=str(raw.get("label") or (known.label if known else rname)),
             location=location, zones=zones,
             primary=bool(raw.get("primary")), secondary=bool(raw.get("secondary")), index=i,
+            tie_breaker=bool(raw.get("tie_breaker")),
         ))
 
     if sum(r.primary for r in regions) > 1:
@@ -193,6 +207,11 @@ def parse_preset(name: str, data, catalog: Catalog, *, default_version: str, sub
         regions[0] = replace(regions[0], primary=True)
     if sum(r.secondary for r in regions) > 1:
         raise PresetError(f"preset {name}: only one region can be secondary")
+    for r in regions:
+        if r.tie_breaker and r.primary:
+            raise PresetError(f"preset {name}: the tie-breaker can't be the primary region ({r.name}): it homes no data")
+        if r.tie_breaker and r.secondary:
+            raise PresetError(f"preset {name}: the tie-breaker can't be the secondary region ({r.name}): leases never go there")
     if model not in MODELS:
         raise PresetError(f"unknown deployment model {model!r}: use {' or '.join(MODELS)}")
     if model == "single-region":
@@ -200,6 +219,10 @@ def parse_preset(name: str, data, catalog: Catalog, *, default_version: str, sub
         # a zone outage. Same names and clouds as the multi-region version of the preset.
         primary = next(r for r in regions if r.primary)
         regions = [replace(primary, nodes=max(primary.nodes, min(3, len(primary.zones))), secondary=False, index=1)]
+    serving = [r for r in regions if not r.tie_breaker]
+    if len(serving) < len(regions) and len(serving) < 2:
+        raise PresetError(f"preset {name}: a tie-breaker needs two regions besides the tie-breaker to serve the data "
+                          f"(has {len(serving)})")
     if any(r.primary and r.secondary for r in regions):
         raise PresetError(f"preset {name}: the primary region cannot also be secondary")
     total = sum(r.nodes for r in regions)

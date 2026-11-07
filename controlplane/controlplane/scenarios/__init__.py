@@ -34,6 +34,8 @@ class Scenario:
     needs_latency: bool = False
     needs_goal: str | None = None  # "region": the scenario switches the goal itself if needed
     min_primary_nodes: int = 0
+    needs_tie_breaker: bool = False
+    check: Callable[[Topology], list[str]] | None = None  # any other requirement, as reasons it can't run
     prepare: Callable[["Context", dict], None] | None = None
     reset: Callable[["Context", dict], None] | None = None
 
@@ -51,6 +53,10 @@ class Scenario:
         if primary_nodes < self.min_primary_nodes:
             out.append(f"needs {self.min_primary_nodes} nodes in {topo.primary.name} (has {primary_nodes}): "
                        f"add a node there first")
+        if self.needs_tie_breaker and not topo.tie_breakers:
+            out.append("needs a tie-breaker region: build the stretch preset")
+        if self.check:
+            out += self.check(topo)
         return out
 
 
@@ -221,11 +227,11 @@ class Runner:
             if gen != self._gen or self._active is None:
                 return
             for st, spec in zip(self._steps, self._active.steps):
-                try:
-                    st["caption"] = spec.caption.format(**self._state)
-                    st["label"] = spec.label.format(**self._state)
-                except (KeyError, IndexError, ValueError):
-                    pass
+                for key in ("caption", "label", "observe"):  # the stage shows all three
+                    try:
+                        st[key] = getattr(spec, key).format(**self._state)
+                    except (KeyError, IndexError, ValueError):
+                        pass
 
     def next(self) -> None:
         with self._lock:

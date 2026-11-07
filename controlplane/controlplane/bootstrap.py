@@ -72,7 +72,24 @@ def bootstrap_statements(topo: Topology, *, time_until_store_dead: str,
             if topo.survival_goal == "region" and topo.secondary:
                 out.append(Statement(f"ALTER DATABASE {db} SET SECONDARY REGION {_ident(topo.secondary.name)}"))
             out.append(Statement(f"ALTER DATABASE {db} SURVIVE {topo.survival_goal.upper()} FAILURE"))
+    out.extend(tie_breaker_statements(topo))
     return out
+
+
+# The cluster-wide ranges a tie-breaker must not lead: their leaseholder serves every node (meta, liveness, system
+# tables), so a lease there would turn losing the tie-breaker into an outage blip.
+SYSTEM_ZONES = ("RANGE default", "RANGE meta", "RANGE liveness", "RANGE system", "DATABASE system")
+
+
+def tie_breaker_statements(topo: Topology) -> list[Statement]:
+    """Keep every system lease off the tie-breaker regions. Their own regional data stays led there (CockroachDB
+    always leads regional data from its home region), so no data is homed in them: they only vote.
+    Optional: named ranges differ between versions, and a missing one must not stop provisioning."""
+    if not topo.tie_breakers:
+        return []
+    avoid = ", ".join(f"-region={r.name}" for r in topo.tie_breakers)
+    return [Statement(f"ALTER {zone} CONFIGURE ZONE USING lease_preferences = '[[{avoid}]]'", optional=True)
+            for zone in SYSTEM_ZONES]
 
 
 def run_bootstrap(conn, statements: Iterable[Statement], log: Callable[[str], None] = print,

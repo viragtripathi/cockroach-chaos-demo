@@ -37,6 +37,8 @@ export const GLOSSARY = {
   // regions and zones
   primary: 'Primary region: home of the leaseholders for regional data, so reads and writes there are fastest. ' +
     'Other regions keep copies for survival and for local follower reads.',
+  tieBreaker: 'Tie-breaker: holds one copy of every range so that losing a whole region still leaves a majority. ' +
+    'No data is homed here and no busy range is led from here: it only votes, so losing it changes nothing.',
   secondary: 'Secondary region: where the leaseholders move if the primary region goes down, so failover lands ' +
     'somewhere predictable.',
   regionState: {
@@ -90,6 +92,9 @@ export const GLOSSARY = {
 
   chart: 'Transactions per second, stacked by gateway region: the region of the node each client connected to. ' +
     'Red dashed lines mark failures, green lines mark recovery.',
+  heartbeat: 'Heartbeat: this node is alive and serving. Taller beats mean it holds more of the data (a new node ' +
+    'starts faint and grows as copies move onto it, a draining node fades); faster beats mean more traffic goes ' +
+    'through it. An uneven amber beat is a brownout, a dashed line means it is cut off, and a flat line means it is down.',
   rate: (n) => `Transactions per second that clients sent through this node (it was their gateway): ${n}/s right ` +
     'now. Any node can serve any query; the load balancer spreads clients across healthy nodes.',
   replicas: (n, goal) => 'R (replicas): CockroachDB splits data into ranges and keeps several copies of each (3, or ' +

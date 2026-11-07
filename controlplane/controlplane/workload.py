@@ -191,6 +191,12 @@ class Workload:
         if restart:
             self.start()
 
+    def set_cross_region(self, pct: int) -> None:
+        """Change the cross-region share without a restart: every worker reads it on its next pick."""
+        if not 0 <= pct <= 50:
+            raise ValueError("cross-region share must be 0-50%")
+        self.cross_region_pct = int(pct)
+
     def setup(self) -> None:
         retry_with_backoff(self._setup_once, max_retries=5, initial_backoff=0.5, sleep=self._sleep)
 
@@ -200,11 +206,18 @@ class Workload:
             with conn.cursor() as cur:
                 regions, primary = self._database_regions(cur) if self.cluster is not None else ([], None)
                 if regions:
-                    self._setup_homed(cur, regions, primary)
+                    # A tie-breaker only votes: no accounts and no workers are homed there.
+                    tie = self._tie_breakers()
+                    self._setup_homed(cur, [r for r in regions if r not in tie] or regions, primary)
                 else:
                     self._setup_plain(cur)
         finally:
             conn.close()
+
+    def _tie_breakers(self) -> set[str]:
+        """Regions the topology marks as tie-breakers, from the collector's latest snapshot."""
+        snap = self.cluster() if self.cluster else None
+        return {r["name"] for r in (snap or {}).get("regions", []) if r.get("tie_breaker")}
 
     @staticmethod
     def _database_regions(cur) -> tuple[list[str], str | None]:
@@ -326,7 +339,8 @@ class Workload:
                 others = [r for r in regions if r != region]
                 if not others:
                     raise RuntimeError(f"{region} is the only region with Payments accounts; nothing can take them")
-                target = primary if primary and primary != region else others[0]
+                serving = [r for r in others if r not in self._tie_breakers()] or others
+                target = primary if primary and primary != region else serving[0]
                 self._removing = region
                 self._paused_for_removal = self.running
                 if self.running:

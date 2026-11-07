@@ -49,7 +49,7 @@ def assemble_snapshot(topo: Topology | None, containers: Sequence[ContainerInfo]
             regions.append({
                 "name": r.name, "provider": r.provider, "label": r.label,
                 "location": list(r.location) if r.location else None,
-                "primary": r.primary, "secondary": r.secondary, "zones": list(r.zones),
+                "primary": r.primary, "secondary": r.secondary, "tie_breaker": r.tie_breaker, "zones": list(r.zones),
                 "state": state, "nodes": [x["name"] for x in members],
             })
 

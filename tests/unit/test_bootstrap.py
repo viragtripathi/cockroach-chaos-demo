@@ -127,3 +127,18 @@ def test_laptop_disk_stalls_do_not_kill_nodes():
     stmts = bootstrap_statements(topo("classic"), time_until_store_dead="1m15s")
     st = next(s for s in stmts if "max_sync_duration.fatal.enabled" in s.sql)
     assert st.sql.endswith("= false") and st.optional
+
+
+def test_a_tie_breaker_holds_copies_but_system_leases_stay_off_it():
+    statements = bootstrap_statements(topo("stretch"), time_until_store_dead="1m15s")
+    s = sqls(statements)
+    for target in ("RANGE default", "RANGE meta", "RANGE liveness", "RANGE system", "DATABASE system"):
+        assert f"ALTER {target} CONFIGURE ZONE USING lease_preferences = '[[-region=us-east4]]'" in s, target
+    assert s.index("ALTER DATABASE chaos SURVIVE REGION FAILURE") < s.index("ALTER RANGE meta CONFIGURE ZONE USING "
+                                                                          "lease_preferences = '[[-region=us-east4]]'")
+    lease = [st for st in statements if "lease_preferences" in st.sql]
+    assert all(st.optional for st in lease), "a version without one of these ranges must not stop provisioning"
+
+
+def test_no_lease_preferences_without_a_tie_breaker():
+    assert not any("lease_preferences" in x for x in sqls(bootstrap_statements(topo("aws"), time_until_store_dead="1m15s")))

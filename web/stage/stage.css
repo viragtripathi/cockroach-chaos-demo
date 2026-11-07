@@ -13,7 +13,7 @@ button { font: inherit; color: inherit; }
 
 /* header */
 .top { position: absolute; left: 0; top: 0; width: 1920px; height: 88px; display: flex; align-items: center; gap: 22px; padding: 0 36px; border-bottom: 1px solid var(--line); }
-.logo { height: 19px; display: block; }
+.logo { height: 34px; display: block; }  /* the 367x73 brandmark at the old lockup's ~171px width */
 [data-theme=light] .logo { filter: brightness(0); }
 .sep { width: 1px; height: 30px; background: var(--line); }
 h1 { font-weight: 300; font-size: 32px; letter-spacing: -.3px; white-space: nowrap; }
@@ -55,6 +55,7 @@ body:not(.can-control) .control-only { display: none !important; }
 .rsub { display: flex; gap: 12px; align-items: baseline; margin-top: 6px; min-height: 18px; }
 .rcity { font-size: 15px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rrole { font-family: var(--mono); font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--brand-text); flex: none; }
+.rrole.tie { color: var(--muted); }  /* the tie-breaker only votes: quieter than the regions that serve */
 .rstatus { margin-left: auto; flex: none; }
 .rstatus.healthy { border-color: color-mix(in srgb, var(--healthy-line) 50%, transparent); color: var(--healthy-line); }
 .rstatus.down { border-color: color-mix(in srgb, var(--failed) 60%, transparent); color: var(--failed); }
@@ -68,11 +69,11 @@ body.can-control .node:hover { outline: 2px solid color-mix(in srgb, var(--fg) 2
 .node .nn { font-family: var(--mono); font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node .nl { font-family: var(--mono); font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node .rate { position: absolute; right: 10px; top: 11px; font-family: var(--mono); font-size: 13px; color: var(--info); }
-.node .bar { height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 8%, transparent); overflow: hidden; margin: 6px 0; }
-.node .bar i { display: block; height: 100%; border-radius: 3px; background: currentColor; opacity: .7; transition: width .8s ease; }
-.node.live .bar { color: var(--healthy-line); } .node.joining .bar, .node.draining .bar { color: var(--brand); }
-.node.brownout .bar { color: var(--degraded); } .node.partitioned .bar, .node.isolated .bar { color: var(--info); }
-.node.dead .bar { display: none; }
+/* Heartbeat trace, drawn by stage.js; its colour follows the node's state. */
+.node .beat { display: block; width: 100%; flex: 0 1 40px; height: 40px; min-height: 16px; margin: 2px 0; color: var(--healthy-line); }
+.node.joining .beat, .node.draining .beat { color: var(--brand); }
+.node.brownout .beat { color: var(--degraded); } .node.partitioned .beat, .node.isolated .beat { color: var(--info); }
+.node.dead .beat { color: var(--failed); } .node.unknown .beat { color: var(--muted); } .node.missing .beat { visibility: hidden; }
 .node.live { border-color: color-mix(in srgb, var(--healthy-line) 60%, transparent); background: color-mix(in srgb, var(--healthy) 11%, transparent); box-shadow: 0 0 22px color-mix(in srgb, var(--healthy) 16%, transparent); }
 .node.live .nn { color: var(--healthy-line); }
 .node.dead { border-color: color-mix(in srgb, var(--failed) 75%, transparent); background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--failed) 14%, transparent) 0 7px, color-mix(in srgb, var(--failed) 3%, transparent) 7px 14px); }
@@ -108,7 +109,7 @@ body.can-control .node:hover { outline: 2px solid color-mix(in srgb, var(--fg) 2
 #regions.compact .node .nn { font-size: 14px; }
 #regions.compact .node .nl, #regions.compact .node .rate { display: none; }
 #regions.compact .ractions { margin-top: 8px; }
-#regions.compact .rsub, #regions.compact .node .bar { display: none; }
+#regions.compact .rsub, #regions.compact .node .beat { display: none; }
 
 /* chart and side column */
 .chart-box { left: 24px; top: 696px; width: 1360px; height: 360px; }

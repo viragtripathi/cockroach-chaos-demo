@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -274,6 +275,18 @@ def browser(proof: Proof, plan: list, timeout=240) -> dict:
 
 STAGE = f"{PANEL}/"
 
+# Per node tile: how much of its height the heartbeat trace spans, and a fingerprint of its pixels (to see it move).
+HEARTBEAT_PROBE = """(() => [...document.querySelectorAll('#regions .node')].map((t) => {
+  const c = t.querySelector('canvas.beat');
+  if (!c || !c.width) return { name: t.dataset.name, dead: t.classList.contains('dead'), extent: null, sum: null };
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  let top = c.height, bottom = -1, sum = 0;
+  for (let i = 3; i < d.length; i += 4) if (d[i] > 40) {
+    const y = Math.floor((i >> 2) / c.width); top = Math.min(top, y); bottom = Math.max(bottom, y); sum = (sum + d[i] * i) % 1000003;
+  }
+  return { name: t.dataset.name, dead: t.classList.contains('dead'), extent: bottom < 0 ? 0 : (bottom - top + 1) / c.height, sum };
+}))()"""
+
 # Measures the stage's "Payments by home region" chips against the chart in three layouts: as shown, with a scenario
 # panel narrowing the chart, and with one region's chip grown by a failover ("via ..."). The label may shrink; no
 # number may be cut off, and nothing may cover the chart.
@@ -402,16 +415,28 @@ def main() -> int:
     p.run("Idle cluster shows 0 transactions (telemetry is not SQL)", idle_traffic)
 
     def client_traffic(ev):
-        with psycopg.connect(host="localhost", port=26257, user="root", dbname="defaultdb", sslmode="disable", autocommit=True) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS proof_probe (id UUID PRIMARY KEY DEFAULT gen_random_uuid())")
-            deadline = time.time() + 8
-            n = 0
-            while time.time() < deadline:
-                conn.execute("INSERT INTO proof_probe DEFAULT VALUES")
-                n += 1
-        seen = wait_for(lambda: (lambda v: v if v and v > 5 else None)((state()["traffic"]["cluster"] or {}).get("txn_s")),
-                        20, "external client traffic to show up", every=1)
-        ev.update({"inserts sent by a plain client": n, "cluster tx/s seen": seen})
+        # A plain client writes while the stage's rate is watched: the rate is measured over 2-second windows, so it
+        # must be read while the client runs. One client doing serial inserts across regions manages a few per second;
+        # idle reads 0 (the check above), so any steady rate here is the client being counted.
+        stop, sent = threading.Event(), [0]
+
+        def client():
+            with psycopg.connect(host="localhost", port=26257, user="root", dbname="defaultdb", sslmode="disable",
+                                 autocommit=True) as conn:
+                conn.execute("CREATE TABLE IF NOT EXISTS proof_probe (id UUID PRIMARY KEY DEFAULT gen_random_uuid())")
+                while not stop.is_set():
+                    conn.execute("INSERT INTO proof_probe DEFAULT VALUES")
+                    sent[0] += 1
+
+        writer = threading.Thread(target=client, daemon=True)
+        writer.start()
+        try:
+            seen = wait_for(lambda: (lambda v: v if v and v >= 1 else None)((state()["traffic"]["cluster"] or {}).get("txn_s")),
+                            30, "external client traffic to show up", every=1)
+        finally:
+            stop.set()
+            writer.join(timeout=15)
+        ev.update({"inserts sent by a plain client": sent[0], "cluster tx/s seen while it ran": seen})
         sql("DROP TABLE IF EXISTS proof_probe")
     p.run("Traffic from any client (like Banko) is counted", client_traffic)
 
@@ -461,6 +486,17 @@ def main() -> int:
         check(chaos("crash", "node", target)[0] == 200, "crash refused")
         wait_for(lambda: node(state(), target)["liveness"] == "dead", 90, f"{target} to be detected as dead")
         ev["detected dead after"] = f"{time.time() - t0:.0f} s"
+        # On the stage the crashed node's heartbeat flatlines while every other node keeps beating.
+        r = browser(p, [{"do": "open", "url": STAGE, "settle": 5000}, {"do": "eval", "as": "a", "expr": HEARTBEAT_PROBE},
+                        {"do": "wait", "ms": 450}, {"do": "eval", "as": "b", "expr": HEARTBEAT_PROBE}])
+        tiles, later = r["a"], {t["name"]: t for t in r["b"]}
+        down = next((t for t in tiles if t["name"] == target), None)
+        beating = [t for t in tiles if t["name"] != target and not t["dead"]]
+        ev["heartbeats"] = f"{target} flat ({down and down['extent']}); {len(beating)} others beating"
+        check(down is not None and down["dead"] and down["extent"] is not None and down["extent"] <= 0.15,
+              f"{target}'s heartbeat did not flatline on the stage")
+        check(all(t["extent"] and t["extent"] >= 0.3 and later[t["name"]]["sum"] != t["sum"] for t in beating),
+              "a live node's heartbeat is flat or not moving")
         chaos("recover", "node", target)
         t1 = time.time()
         wait_for(lambda: node(state(), target)["liveness"] == "live", 180, f"{target} to come back")
@@ -631,13 +667,20 @@ def main() -> int:
     p.run("Add a node: it joins and data rebalances onto it", add_node)
 
     def survival(ev):
+        # Payments homes accounts in every region and ZONE survival keeps each region's copies at home, so it needs three
+        # nodes in every region: refused here, with the reason; the switch itself is proved on the residency preset.
+        status, body = api("POST", "/api/cluster/survival", {"goal": "zone"})
+        ev["ZONE survival on this cluster"] = f"{status}: {body}"
+        check(status == 400 and "every region needs 3 nodes" in str(body), f"ZONE survival should be refused with the reason: {status} {body}")
+    p.run("ZONE survival is refused until every region has 3 nodes", survival)
+
+    def survival_switch(ev):
         for goal in ("zone", "region"):
             previous = op_id()
             check(api("POST", "/api/cluster/survival", {"goal": goal})[0] == 202, f"{goal} survival refused")
             check(wait_op(previous)["status"] == "done", f"switch to {goal} failed")
             ev[goal] = sql("SELECT survival_goal FROM [SHOW SURVIVAL GOAL FROM DATABASE chaos]", one=True)[0]
         check(ev == {"zone": "zone", "region": "region"}, "survival goal didn't switch")
-    p.run("Switch survival goal to ZONE and back to REGION", survival)
 
     def primary(ev):
         for region in ("us-west-2", "us-east-1"):
@@ -666,7 +709,11 @@ def main() -> int:
 
     # ---- scenarios ----
     p.section = "Guided scenarios"
-    for sc in api("GET", "/api/scenarios")[1]:
+    # proved later in their own sections, on the preset each one needs
+    own_section = {"stretch-cloud": "Stretch cluster with a tie-breaker", "data-domicile": "Data domiciling",
+                   "zone-vs-region": "Data domiciling"}  # ZONE survival needs 3 nodes in every region: the residency preset
+
+    def scenario_check(sc):
         def run_scenario(ev, sc=sc):
             check(not sc["unmet"], f"requirements not met: {sc['unmet']}")
             status, body = api("POST", f"/api/scenarios/{sc['id']}/start")
@@ -686,7 +733,13 @@ def main() -> int:
             recover_all()
             api("POST", "/api/workload/stop")
             healthy()
-        p.run(f"Scenario: {sc['title']}", run_scenario, long=True)
+        return run_scenario
+
+    for sc in api("GET", "/api/scenarios")[1]:
+        if sc["id"] in own_section:
+            p._record(f"Scenario: {sc['title']}", "skip", 0.0, {}, f"proved in the {own_section[sc['id']]} section")
+            continue
+        p.run(f"Scenario: {sc['title']}", scenario_check(sc), long=True)
 
     p.section = "Elasticity"
 
@@ -959,6 +1012,98 @@ def main() -> int:
         impact = steps[2]["result"] or {}
         check(impact.get("Money lost") == "$0", f"money lost: {impact}")
     p.run("Single region: payments survive a zone outage with $0 lost", survive_zone)
+
+    # ---- stretch cluster ----
+    p.section = "Stretch cluster with a tie-breaker"
+
+    def stretch(ev):
+        s = rebuild("stretch", expect_nodes=5)
+        tie = next(r["name"] for r in s["regions"] if r.get("tie_breaker"))
+        tie_ids = ",".join(str(n["node_id"]) for n in s["nodes"] if n["region"] == tie)
+        check(api("POST", "/api/workload/start")[0] == 200, "payments refused to start")
+        w = wait_for(lambda: (lambda w: w if w["tps"] > 50 and w["balance"] == 10_000_000 else None)(state()["workload"]),
+                     240, "payments to run on the stretch cluster")
+        accounts = {str(r): int(c) for r, c in sql("SELECT crdb_region::STRING, count(*) FROM accounts GROUP BY 1", db="chaos")}
+        # System leases leave the tie-breaker; only its own (empty) Payments partitions stay led there.
+        led = lambda: [str(r[0]) for r in sql(f"SELECT table_name FROM [SHOW CLUSTER RANGES WITH DETAILS, TABLES] "  # noqa: E731
+                                              f"WHERE lease_holder IN ({tie_ids})")]
+        tables = wait_for(lambda: (lambda t: t if all(x in ("accounts", "transfers") for x in t) else None)(led()), 300,
+                          "system leases to leave the tie-breaker")
+        r = browser(p, [{"do": "open", "url": STAGE, "settle": 5000},
+                        {"do": "eval", "as": "roles", "expr": "[...document.querySelectorAll('.rrole')].map((e) => e.textContent)"},
+                        {"do": "shot", "file": p.shot("stretch-stage")}])
+        ev.update({"regions": {x["name"]: x["provider"] for x in s["regions"]}, "tie-breaker": tie,
+                   "Payments workers by home": w["homing"]["workers"], "accounts by home": accounts,
+                   "ranges the tie-breaker leads": tables or "none", "stage roles": r["roles"], "stage": p.shot("stretch-stage")})
+        check(s["cluster"]["survival_goal"] == "region" and len(s["nodes"]) == 5, "not a 5-node REGION-survival cluster")
+        check(tie not in w["homing"]["workers"] and tie not in accounts, "Payments homed accounts or workers in the tie-breaker")
+        check("Tie-breaker" in r["roles"], "the stage doesn't label the tie-breaker")
+    p.run("Stretch: 2 AWS + 2 Azure + a GCP tie-breaker; Payments and system leases stay off the tie-breaker", stretch)
+
+    def stretch_scenario(ev):
+        status, body = api("POST", "/api/scenarios/stretch-cloud/start")
+        check(status == 200, f"start refused: {body}")
+        cur = lambda: api("GET", "/api/scenarios/current")[1]  # noqa: E731
+        wait_for(lambda: not cur()["busy"], 300, "the scenario to prepare")
+        for _ in cur()["steps"]:
+            api("POST", "/api/scenarios/next")
+            wait_for(lambda: not cur()["busy"], 600, "the step to finish")
+        steps = cur()["steps"]
+        api("POST", "/api/scenarios/stop")
+        for st in steps:
+            ev[st["label"]] = st["error"] or st["result"]
+        time.sleep(5)
+        recover_all()
+        api("POST", "/api/workload/stop")
+        healthy()
+        check(all(st["status"] == "done" for st in steps), "a step failed")
+        cloud, tie = steps[2]["result"] or {}, steps[4]["result"] or {}
+        check(cloud.get("Money lost") == "$0", f"money lost when the cloud went down: {cloud}")
+        check(tie.get("Money lost") == "$0" and tie.get("Recovery time") == "0 s", f"losing the tie-breaker was noticed: {tie}")
+    p.run("Stretch: lose all of AWS with $0 lost, then the tie-breaker with no dip", stretch_scenario)
+
+    # ---- data domiciling ----
+    p.section = "Data domiciling"
+
+    def domicile(ev):
+        rebuild("residency", expect_nodes=9)
+        status, body = api("POST", "/api/scenarios/data-domicile/start")
+        check(status == 200, f"start refused: {body}")
+        cur = lambda: api("GET", "/api/scenarios/current")[1]  # noqa: E731
+        wait_for(lambda: not cur()["busy"], 300, "the scenario to prepare")
+        for _ in cur()["steps"]:
+            api("POST", "/api/scenarios/next")
+            wait_for(lambda: not cur()["busy"], 600, "the step to finish")
+        steps = cur()["steps"]
+        api("POST", "/api/scenarios/stop")
+        for st in steps:
+            ev[st["label"]] = st["error"] or st["result"]
+        time.sleep(5)
+        recover_all()
+        api("POST", "/api/workload/stop")
+        healthy()
+        check(all(st["status"] == "done" for st in steps), "a step failed")
+        before, after, node, region, back = (st["result"] or {} for st in steps[:2] + steps[2:3] + steps[4:6])
+        check(before.get("Copies outside their home region") not in (None, "0"), f"by default copies should cross borders: {before}")
+        check(after.get("Copies outside their home region") == "0", f"copies outside their home region: {after}")
+        check("committed" in node.values() and "0" in node.values(), f"the Singapore row with a node down: {node}")
+        writes = [v for k, v in region.items() if k != "Payments"]
+        check(writes.count("committed") == 2 and writes.count("waits for ap-southeast-1") == 1 and
+              "$0 lost" in region.get("Payments", ""), f"losing Singapore should pause only Singapore: {region}")
+        check("committed again" in back.values(), f"Singapore's customers after it came back: {back}")
+        check(not sql("SELECT 1 FROM [SHOW DATABASES] WHERE database_name = 'residency'"), "the scenario left its database")
+    p.run("Data domiciling: copies stay home, and losing a region pauses only its own customers", domicile)
+
+    p.run("Switch survival goal to ZONE and back to REGION (3 nodes in every region)", survival_switch)
+
+    zone_vs_region = next(sc for sc in api("GET", "/api/scenarios")[1] if sc["id"] == "zone-vs-region")
+
+    def zone_vs_region_check(ev):
+        scenario_check(zone_vs_region)(ev)
+        stall = next((v for k, v in ev.items() if k.startswith("Take down") and not k.endswith("again")), None) or {}
+        check(str(stall.get("Other regions", "")).startswith("keep paying"),
+              f"under ZONE survival only the lost region's payments should stall: {stall}")
+    p.run("Scenario: ZONE vs REGION survival (3 nodes in every region)", zone_vs_region_check, long=True)
 
     # ---- custom region names ----
     p.section = "Custom presets and region names"

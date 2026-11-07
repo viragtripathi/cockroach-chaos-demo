@@ -40,3 +40,11 @@ def test_gateway_candidates_skip_unusable_nodes_and_fall_back_by_distance():
     flagged = [dict(NODES[0], isolated=True), dict(NODES[1], partitioned=True), dict(NODES[2], runtime="stopped")]
     assert gateway_candidates("us-east-1", {"regions": REGIONS, "nodes": flagged}, random.Random(1)) == []
     assert gateway_candidates("us-east-1", {}, random.Random(1)) == []
+
+
+def test_failover_goes_to_a_serving_region_before_a_nearer_tie_breaker():
+    # one metro: the GCP tie-breaker is 14 km from us-east-1, Azure 240 km; clients still go to Azure
+    regions = [{"name": "us-east-1", "location": [38.9, -77.4], "primary": True},
+               {"name": "eastus", "location": [37.4, -79.8], "secondary": True},
+               {"name": "us-east4", "location": [39.0, -77.5], "tie_breaker": True}]
+    assert region_order("us-east-1", regions) == ["us-east-1", "eastus", "us-east4"]

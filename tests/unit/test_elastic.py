@@ -27,6 +27,7 @@ class FakeDocker:
         self.containers = {n.name: ContainerInfo(n.name, n.name, True, "running", {}, {"crdb-chaos": n.ip}) for n in topo.nodes}
         self.ran, self.removed, self.execs, self.stopped = [], [], [], []
         self.decommission_rc = decommission_rc
+        self.refusals: list[str] = []  # decommission outputs to refuse with first, one per attempt
 
     def list_nodes(self):
         return list(self.containers.values())
@@ -37,6 +38,8 @@ class FakeDocker:
 
     def exec(self, name, cmd, timeout=60.0, check=True):
         self.execs.append((name, list(cmd)))
+        if self.refusals and "decommission" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, "", self.refusals.pop(0))
         return subprocess.CompletedProcess(cmd, self.decommission_rc, "", "" if not self.decommission_rc else "ERROR: not enough nodes")
 
     def stop(self, name, grace=20):
@@ -294,12 +297,22 @@ def test_schema_changes_retry_transient_errors(tmp_path):
     assert ops.snapshot()["status"] == "done", ops.snapshot()
 
 
-def test_zone_survival_needs_three_nodes_in_the_primary_region(tmp_path):
-    from controlplane.topology import load_preset as lp
+def test_zone_survival_needs_three_nodes_in_every_region_that_homes_payments(tmp_path):
+    # Payments homes accounts in every region, and ZONE survival keeps each region's three voters at home
+    from controlplane.topology import load_preset as lp, parse_preset as pp
     six = lp(ROOT / "presets", "aws", CAT, **KW)  # 3 regions x 2 nodes
-    e, *_ = make(tmp_path, topo=six)
-    with pytest.raises(ElasticError, match="3 nodes in us-east-1"):
+    e, *_ = make(tmp_path / "six", topo=six)
+    with pytest.raises(ElasticError, match="us-east-1 has 2"):
         e.set_survival("zone")
+    seven = pp("seven", {"regions": [{"name": "us-east-1", "provider": "aws", "nodes": 3, "primary": True},
+                                     {"name": "us-west-2", "provider": "aws", "nodes": 2},
+                                     {"name": "eu-west-1", "provider": "aws", "nodes": 2}]}, CAT, **KW)
+    e, *_ = make(tmp_path / "seven", topo=seven)
+    with pytest.raises(ElasticError, match="us-west-2 has 2"):
+        e.set_survival("zone")
+    e, docker, db, prov, lb, chaos, ops = make(tmp_path / "nine", topo=lp(ROOT / "presets", "residency", CAT, **KW))
+    e.set_survival("zone")
+    assert ops.snapshot()["status"] == "done" and prov.topology.survival_goal == "zone"
 
 
 def test_decommission_waits_out_a_temporarily_suspect_store(tmp_path):
@@ -358,3 +371,37 @@ def test_a_hook_that_fails_without_a_message_still_names_the_failure(tmp_path):
     op = ops.snapshot()
     assert op["status"] == "failed" and op["error"] == "StopIteration"
     assert not any("DROP" in s for s in db.sql)
+
+
+def test_the_tie_breaker_cannot_become_the_primary_region(tmp_path):
+    stretch = load_preset(ROOT / "presets", "stretch", CAT, **KW)
+    e, docker, db, prov, lb, chaos, ops = make(tmp_path, topo=stretch)
+    with pytest.raises(ElasticError, match="tie-breaker"):
+        e.set_primary("us-east4")
+    e.set_primary("eastus")  # the other serving cloud is fine
+    assert ops.snapshot()["status"] == "done" and prov.topology.primary.name == "eastus"
+
+
+def _blocked(region):
+    return ("ranges blocking decommission detected\nn8 has 25 replicas blocked with error: \"0 of 7 live stores are able "
+            "to take a new replica for the range (4 already have a voter, 0 already have a non-voter); replicas must match "
+            f"constraints [{{+region={region}:1}} {{+region=us-east-1:1}}]\"\nERROR: Cannot decommission nodes.")
+
+
+def test_removing_a_region_waits_while_placement_still_names_it(tmp_path):
+    # Right after DROP REGION the placement rules still name the region for a few seconds (Payments' REGIONAL BY ROW
+    # tables are repartitioned), and CockroachDB refuses to decommission its nodes until they catch up.
+    e, docker, db, prov, lb, chaos, ops = make(tmp_path, topo=AWS)
+    docker.refusals = [_blocked("us-west-2"), _blocked("us-west-2")]
+    e.remove_region("us-west-2")
+    assert ops.snapshot()["status"] == "done", ops.snapshot()
+    assert sum("decommission" in cmd for _, cmd in docker.execs) >= 3 and not docker.refusals
+
+
+def test_a_decommission_blocked_by_placement_it_cannot_meet_fails_at_once(tmp_path):
+    e, docker, db, prov, lb, chaos, ops = make(tmp_path)
+    docker.refusals = [_blocked("us-west-2")] * 3
+    e.decommission("us-west-2b-n2")
+    op = ops.snapshot()
+    assert op["status"] == "failed" and "must match constraints" in op["error"]
+    assert sum("decommission" in cmd for _, cmd in docker.execs) == 1

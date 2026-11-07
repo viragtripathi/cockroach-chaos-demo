@@ -1,0 +1,12 @@
+# Data residency: customers in the US, the EU and Asia Pacific, each kept in their home region (see the data
+# domiciling scenario). Three regions, so the cluster itself survives losing one: with two, one region always holds the
+# majority of the cluster's own data. Three nodes in each, so a domiciled row keeps all three copies at home, one per
+# availability zone.
+display_name: Global Payments
+cluster_id: global-payments
+survival_goal: region
+latency: realistic
+regions:
+  - { name: us-east-1, provider: aws, nodes: 3, primary: true }
+  - { name: eu-west-1, provider: aws, nodes: 3, secondary: true }
+  - { name: ap-southeast-1, provider: aws, nodes: 3 }

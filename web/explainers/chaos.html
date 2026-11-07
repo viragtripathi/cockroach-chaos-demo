@@ -185,7 +185,7 @@ const fmt = n => Math.round(n).toLocaleString('en-US');
 const THEMES = {
   dark: { bg:'#000000', land:'#262626', fg:'#ffffff', muted:'#888884', green:'#aede54', greenLine:'#aede54', greenRGB:'174,222,84',
           blue:'#60ecff', blueRGB:'96,236,255', purple:'#9059ff', purpleRGB:'144,89,255', red:'#ff4d5e', redRGB:'255,77,94',
-          amber:'#ffb547', amberRGB:'255,181,71', taupe:'#e5e4dc', glow:1, blend:'lighter', logo:'#aede54', chip:'#000000',
+          amber:'#ffb547', amberRGB:'255,181,71', taupe:'#e5e4dc', glow:1, blend:'lighter', logo:'#e5e3dc', chip:'#000000',
           hammerHead:'#e5e4dc', hammerHandle:'#6b6b66', user:'#e5e4dc', vignette:'rgba(0,0,0,.55)' },
   light:{ bg:'#f9f8f3', land:'#d9d8ce', fg:'#0b0b0b', muted:'#5f5f5a', green:'#aede54', greenLine:'#43541f', greenRGB:'67,84,31',
           blue:'#144f6b', blueRGB:'20,79,107', purple:'#7a3ff0', purpleRGB:'122,63,240', red:'#d42a41', redRGB:'212,42,65',
@@ -254,7 +254,7 @@ let LOGO = [];
 async function prepLogo() {
   const img = new Image(); img.src = '/static/shared/crl-logo.svg';
   try { await img.decode(); } catch (e) { return; }
-  const w = 980, h = Math.round(w * 120.098 / 1080), oc = document.createElement('canvas');
+  const w = 640, h = Math.round(w * 73 / 367), oc = document.createElement('canvas');
   oc.width = w; oc.height = h; const o = oc.getContext('2d'); o.drawImage(img, 0, 0, w, h);
   const d = o.getImageData(0, 0, w, h).data, cell = 5;
   for (let y = 0; y < h; y += cell) for (let x = 0; x < w; x += cell) {

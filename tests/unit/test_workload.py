@@ -263,13 +263,15 @@ class HomedCursor(FakeCursor):
     def fetchall(self):
         last = self.last
         if "SHOW REGIONS FROM DATABASE" in last:
-            return [("chaos", r, i == 0, False, []) for i, r in enumerate(self.db.regions)]
+            primary = getattr(self.db, "primary", None) or (self.db.regions[0] if self.db.regions else None)
+            return [("chaos", r, r == primary, False, []) for r in self.db.regions]
         if "SHOW TABLES" in last:
             return [(t, loc) for t, (loc, _) in self.db.layout.items()]
         if "crdb_region, count(*)" in last:
             return list((self.db.counts or {}).items())
         if "SELECT crdb_region, id FROM accounts" in last:
-            return [(r, f"00000000-0000-0000-000{i}-{k:012d}") for i, r in enumerate(self.db.regions) for k in range(1, 4)]
+            homed = getattr(self.db, "account_regions", None) or self.db.regions
+            return [(r, f"00000000-0000-0000-000{i}-{k:012d}") for i, r in enumerate(homed) for k in range(1, 4)]
         return super().fetchall()
 
     def fetchone(self):
@@ -323,6 +325,30 @@ def test_partition_leases_are_moved_home_when_they_are_elsewhere():
     db2 = HomedDB(layout={"accounts": HOMED, "transfers": HOMED}, counts=FULL)
     Workload(db2.connect, host="haproxy", cluster=dict).setup()
     assert not any("RELOCATE LEASE" in s for s in db2.sql)
+
+
+# eu-west-1 sorts first alphabetically, as SHOW REGIONS lists them: it must still never receive accounts
+TIE = {"regions": [{"name": "us-east-1", "primary": True}, {"name": "us-west-2", "secondary": True},
+                   {"name": "eu-west-1", "tie_breaker": True}], "nodes": []}
+
+
+def test_payments_home_no_accounts_or_workers_in_a_tie_breaker():
+    db = HomedDB(layout={"accounts": HOMED, "transfers": HOMED}, counts={})
+    db.account_regions = ["us-east-1", "us-west-2"]
+    w = Workload(db.connect, host="haproxy", cluster=lambda: TIE)
+    w.setup()
+    seeds = [p for s, p in db.calls if s.startswith("INSERT INTO accounts (crdb_region, balance)")]
+    assert seeds == [("us-east-1", 1000, 5000), ("us-west-2", 1000, 5000)]
+    assert w.regions == ["us-east-1", "us-west-2"] and sorted(w._homes) == ["us-east-1", "us-west-2"]
+
+
+def test_evacuating_never_moves_accounts_into_a_tie_breaker():
+    db = HomedDB(regions=("eu-west-1", "us-east-1", "us-west-2"), layout={"accounts": HOMED, "transfers": HOMED},
+                 counts={"us-east-1": 5000, "us-west-2": 5000})
+    db.primary = "us-east-1"
+    w = Workload(db.connect, host="haproxy", cluster=lambda: TIE)
+    w.evacuate("us-east-1")
+    assert ("UPDATE accounts SET crdb_region = %s WHERE crdb_region = %s", ("us-west-2", "us-east-1")) in db.calls
 
 
 def test_a_single_region_database_keeps_the_plain_layout():
@@ -405,6 +431,17 @@ def test_about_one_transfer_in_ten_crosses_a_region():
     assert all(w._pick(random.Random(i), "us-west-2")[3] == "us-west-2" for i in range(200))
     with pytest.raises(ValueError):
         w.configure(workers=3, rate=10, cross_region_pct=51)
+
+
+def test_the_cross_region_share_changes_on_the_fly():
+    """Scenarios change it mid-run: no restart, so the history and the recovery baseline stay intact."""
+    w, _ = homed_workload(LIVE)
+    w.stop = w.start = lambda: (_ for _ in ()).throw(AssertionError("restarted"))
+    w.set_cross_region(0)
+    assert all(w._pick(random.Random(i), "us-west-2")[3] == "us-west-2" for i in range(200))
+    assert w.status()["homing"]["cross_region_pct"] == 0
+    with pytest.raises(ValueError):
+        w.set_cross_region(51)
 
 
 def test_status_describes_the_homing():
