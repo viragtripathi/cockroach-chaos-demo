@@ -137,6 +137,7 @@ def test_unknown_preset_and_invalid_yaml(tmp_path):
 def test_custom_presets_live_in_the_custom_folder(tmp_path):
     (tmp_path / "custom").mkdir()
     (tmp_path / "custom" / "mine.yaml").write_text("regions:\n  - {name: us-east-1, provider: aws, nodes: 1}\n", encoding="utf-8")
+    (tmp_path / "custom" / "README.md").write_text("# Your own presets\n", encoding="utf-8")  # shipped in the folder
     assert load_preset(tmp_path, "mine", CATALOG, **KW).nodes[0].name == "us-east-1a-n1"
     assert list_presets(tmp_path) == ["mine"]
 

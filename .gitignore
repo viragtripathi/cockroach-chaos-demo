@@ -220,3 +220,8 @@ proof/
 
 # LangGraph agents demo output
 agents/run/
+
+# Custom presets: the presenter's Custom preset editor saves them here, often under a customer's name. They stay
+# on this machine; a preset for every install belongs in presets/.
+presets/custom/*
+!presets/custom/README.md

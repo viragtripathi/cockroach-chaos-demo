@@ -100,7 +100,7 @@ model, then rebuild). Adding a region to a single-region cluster turns it multi-
 | `small` | us-east-1, us-west-2, eu-west-1 (1 each), for 8 GB laptops | none (plain 3× replication) |
 
 Make your own in the presenter console (Cluster → Custom preset), or copy a file in `presets/` to
-`presets/custom/<name>.yaml`:
+`presets/custom/<name>.yaml`. Git ignores that folder, so your presets stay on your machine:
 
 ```yaml
 display_name: Acme Bank        # shown on the stage and in the explainer: use your customer's name
