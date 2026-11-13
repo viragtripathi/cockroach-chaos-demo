@@ -186,7 +186,10 @@ class FakeElastic:
 def test_every_scenario_runs_end_to_end_against_fakes(scenario):
     db, chaos = RecordingDB(), FakeChaos()
     prov = SimpleNamespace(topology=AWS9)
-    cdc = SimpleNamespace(reset=lambda: None, status=lambda: {"events": 10, "events_s": 5, "resolved_lag_s": 1.0, "max_gap_s": 4.0},
+    delivered = iter(range(10, 10**9, 10))  # rows keep arriving, as they do under load
+    cdc = SimpleNamespace(reset=lambda: None, mark=lambda: None,
+                          status=lambda: {"events": next(delivered), "events_s": 5, "resolved_lag_s": 1.0, "max_gap_s": 4.0,
+                                          "idle_s": 0.2, "max_pause_s": 9.0},
                           resolved_at=10**12)
     ctx = Context(provisioner=prov, chaos=chaos, elastic=FakeElastic(prov), workload=FakeWorkload(), operations=Operations(),
                   events=Events(), connect=db.connect, lb_host="haproxy", catalog=CAT, cdc=cdc, sleep=lambda s: None)
@@ -541,6 +544,24 @@ def test_domiciling_checks_each_customer_once_payments_have_recovered(monkeypatc
     assert [r for r, _ in written] == regions
     assert all(recovered for _, recovered in written), written
     assert out["Payments"] == "recovered in 6 s, $0 lost"
+
+
+def test_the_changefeed_scenario_times_the_pause_by_the_rows_not_by_checkpoints():
+    """On a 9-node, three-region cluster checkpoints arrived about every 30 s: the step waited its full two minutes
+    for one and reported a 0.0 s pause. It now waits for the rows to stop and start again."""
+    from controlplane.scenarios import library as L
+    clock = [100.0]
+    feed = iter([{"events": 500, "idle_s": 0.1, "max_pause_s": 0.3},     # the crash hasn't bitten yet
+                 {"events": 500, "idle_s": 4.0, "max_pause_s": 4.0},     # the stream stands still
+                 {"events": 500, "idle_s": 11.0, "max_pause_s": 11.0},
+                 {"events": 900, "idle_s": 0.2, "max_pause_s": 14.5}])   # another node picked it up
+    last = {}
+    cdc = SimpleNamespace(status=lambda: last.update(next(feed, last)) or dict(last), mark=lambda: None)
+    ctx = SimpleNamespace(cdc=cdc, clock=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s),
+                          query=lambda sql, one=False: (4,))
+    out = L._cdc_resume(ctx, {"job": 7, "crashed_at": 100.0, "events_at_crash": 500})
+    assert out["Longest pause in the stream"] == "14.5 s" and out["Resumed on node"] == 4 and out["Events received"] == 900
+    assert clock[0] < 100.0 + 30     # it did not sit out a deadline
 
 
 def test_regional_by_row_promises_local_reads_not_local_write_speed():

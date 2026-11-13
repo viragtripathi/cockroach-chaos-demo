@@ -38,6 +38,7 @@ class FakeDocker:
 
     def exec(self, name, cmd, timeout=60.0, check=True):
         self.execs.append((name, list(cmd)))
+        self.timeouts = getattr(self, "timeouts", []) + [(next((a for a in cmd if a.startswith("--wait=")), ""), timeout)]
         if self.refusals and "decommission" in cmd:
             return subprocess.CompletedProcess(cmd, 1, "", self.refusals.pop(0))
         return subprocess.CompletedProcess(cmd, self.decommission_rc, "", "" if not self.decommission_rc else "ERROR: not enough nodes")
@@ -82,6 +83,8 @@ class FakeDB:
             def fetchall(self):
                 if "SHOW REGIONS FROM CLUSTER" in self.last:
                     return [(r,) for r in db.regions]
+                if "SHOW REGIONS FROM DATABASE" in self.last:  # the databases' regions; the cluster's unless a test says otherwise
+                    return [(r,) for r in getattr(db, "database_regions", db.regions)]
                 if "gossip_nodes" in self.last:
                     return [(i + 1, f"{n.name}:26257") for i, n in enumerate(db.all_nodes)]
                 return []
@@ -277,6 +280,34 @@ def test_remove_region_is_retry_safe_and_commits_the_goal_change_early(tmp_path)
     db.fail_on = None
     e.remove_region("us-west-2")
     assert ops.snapshot()["status"] == "done", ops.snapshot()
+
+
+def test_the_final_decommission_wait_gets_minutes_not_two(tmp_path):
+    """On a 13-node cluster under payment load `cockroach node decommission --wait=all` ran past two minutes, the
+    command was cut off, and the scale-in failed half-way. Marking the node is quick; waiting for it to be fully
+    decommissioned takes as long as the cluster needs."""
+    e, docker, db, prov, lb, chaos, ops = make(tmp_path, topo=AWS9)
+    e.decommission("us-east-1c-n3")
+    assert ops.snapshot()["status"] == "done", ops.snapshot()
+    waits = dict(docker.timeouts)
+    assert waits["--wait=none"] <= 120 and waits["--wait=all"] >= 900
+
+
+def test_removing_a_region_can_be_retried_after_the_databases_already_dropped_it(tmp_path):
+    """Seen on a 13-node cluster: the removal dropped the region from the databases, then failed on a slow
+    decommission. The retry ran DROP REGION IF EXISTS again, and CockroachDB refuses that on a three-region database
+    that survives region failure even when the region is no longer in it: the removal could never be finished."""
+    e, docker, db, prov, lb, chaos, ops = make(tmp_path, topo=AWS9)
+    db.regions = [r.name for r in AWS9.regions] + ["ap-northeast-1"]
+    e.add_region("ap-northeast-1", "aws", 3)
+    assert ops.snapshot()["status"] == "done", ops.snapshot()
+    db.database_regions = [r.name for r in AWS9.regions]          # the first attempt got this far
+    db.fail_on = 'DROP REGION IF EXISTS "ap-northeast-1"'            # what CockroachDB does with it now
+    db.all_nodes = list(prov.topology.nodes)
+    e.remove_region("ap-northeast-1")
+    assert ops.snapshot()["status"] == "done", ops.snapshot()
+    assert [r.name for r in prov.topology.regions] == [r.name for r in AWS9.regions]
+    assert len(prov.topology.nodes) == 9
 
 
 def test_a_topology_change_between_validation_and_start_is_refused(tmp_path):

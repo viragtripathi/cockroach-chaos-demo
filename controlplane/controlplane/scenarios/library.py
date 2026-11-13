@@ -1008,21 +1008,27 @@ def _cdc_crash(ctx: Context, state: dict) -> dict:
         victim = next(n.name for n in ctx.topo.nodes if n.region == state["primary"])
     state["victim"] = victim
     state["crashed_at"] = ctx.clock()
+    state["events_at_crash"] = ctx.cdc.status()["events"]
+    ctx.cdc.mark()  # pauses in the stream are timed from here
     ctx.chaos.act("crash", "node", victim, confirm=True)
     return {"Crashed": victim, "It was running": f"changefeed {state['job']}"}
 
 
 def _cdc_resume(ctx: Context, state: dict) -> dict:
-    deadline = ctx.clock() + 120
+    """Wait for the stream to stand still and start again, timed by its rows: under load they arrive many times a
+    second. Checkpoints ("resolved") can't time it: on a multi-region cluster they can be 30 s apart."""
+    deadline = ctx.clock() + 180
+    st = ctx.cdc.status()
     while ctx.clock() < deadline:
         st = ctx.cdc.status()
-        if st["resolved_lag_s"] is not None and st["resolved_lag_s"] < 10 and ctx.cdc.resolved_at and \
-                ctx.cdc.resolved_at > state["crashed_at"] + 2:
+        flowing = st["idle_s"] is not None and st["idle_s"] < 2 and st["events"] > state.get("events_at_crash", 0)
+        paused_then_resumed = flowing and st["max_pause_s"] >= 3
+        never_paused = flowing and ctx.clock() - state["crashed_at"] >= 45  # the crashed node wasn't carrying the feed
+        if paused_then_resumed or never_paused:
             break
-        ctx.sleep(2)
-    st = ctx.cdc.status()
+        ctx.sleep(1)
     row = ctx.query(f"SELECT coordinator_id FROM crdb_internal.jobs WHERE job_id = {int(state['job'])}", one=True)
-    return {"Resumed on node": row[0] if row else "?", "Longest pause in resolved timestamps": f"{st['max_gap_s']} s",
+    return {"Resumed on node": row[0] if row else "?", "Longest pause in the stream": f"{st['max_pause_s']} s",
             "Events received": st["events"], "Gaps": "none: resumes from its last checkpoint"}
 
 

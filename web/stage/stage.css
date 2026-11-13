@@ -151,7 +151,8 @@ body.has-scenario .side { display: none; }
 .sc-observe { font-size: 16px; color: var(--muted); margin-top: 8px; }
 .sc-result { margin-top: 14px; flex: 1; min-height: 0; overflow: hidden; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 22px; align-content: start; }
 .sc-result .kv .k { font-family: var(--mono); font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--muted); }
-.sc-result .kv .v { font-size: 24px; font-weight: 300; margin-top: 2px; }
+.sc-result .kv { min-width: 0; }  /* a long value (a 19-digit job id) wraps inside its column instead of running into the next */
+.sc-result .kv .v { font-size: 24px; font-weight: 300; margin-top: 2px; overflow-wrap: anywhere; }
 .sc-result.matrix { display: block; }
 .sc-result table { border-collapse: separate; border-spacing: 4px; font-family: var(--mono); font-size: 13px; }
 .sc-result th { color: var(--muted); font-weight: 400; text-align: left; padding: 2px 8px; white-space: nowrap; }

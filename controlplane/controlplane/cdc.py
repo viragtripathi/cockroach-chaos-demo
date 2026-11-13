@@ -33,8 +33,17 @@ class CdcSink:
             self.resolved: float | None = None
             self.resolved_at: float | None = None
             self.max_gap = 0.0
+            self.last_row_at: float | None = None
+            self.max_pause = 0.0
             self.recent: deque = deque(maxlen=6)
             self._per_second: deque = deque(maxlen=12)
+
+    def mark(self) -> None:
+        """Start timing pauses in the stream from now (the scenario calls this as it crashes the feed's node)."""
+        with self._lock:
+            self.max_pause = 0.0
+            if self.last_row_at is not None:
+                self.last_row_at = self._clock()
 
     def ingest(self, body: dict) -> None:
         now = self._clock()
@@ -47,6 +56,10 @@ class CdcSink:
                     self.resolved, self.resolved_at = ts, now
                 return
             rows = body.get("payload") or []
+            if rows:  # a gap between rows is the stream standing still; under load they arrive many times a second
+                if self.last_row_at is not None:
+                    self.max_pause = max(self.max_pause, now - self.last_row_at)
+                self.last_row_at = now
             self.events += len(rows)
             sec = int(now)
             if self._per_second and self._per_second[-1][0] == sec:
@@ -61,9 +74,14 @@ class CdcSink:
         now = self._clock()
         with self._lock:
             done = [n for s, n in self._per_second if s < int(now)][-5:]
+            idle = None if self.last_row_at is None else now - self.last_row_at
             return {"events": self.events, "events_s": round(sum(done) / len(done)) if done else 0,
                     "resolved_lag_s": None if self.resolved is None else round(max(0.0, now - self.resolved), 1),
-                    "max_gap_s": round(self.max_gap, 1), "recent": list(self.recent)}
+                    "max_gap_s": round(self.max_gap, 1),
+                    # seconds since the last row, and the longest the stream has stood still since mark(): a pause
+                    # still going on counts
+                    "idle_s": None if idle is None else round(idle, 1),
+                    "max_pause_s": round(max(self.max_pause, idle or 0.0), 1), "recent": list(self.recent)}
 
     def serve(self, port: int, cert: Path, key: Path) -> None:
         sink = self

@@ -144,7 +144,12 @@ class Elastic:
                         replace(r, secondary=r.secondary and r.name != name) for r in topo.regions)))
                 if topo.survival_goal != "none":
                     self._ops.step(op, f"Removing {name} from the multi-region databases")
-                    self._run_sql([f"ALTER DATABASE {db} DROP REGION IF EXISTS {_ident(name)}" for db in DATABASES])
+                    # Only where it still is a region. A removal that failed later (a slow decommission) is retried
+                    # with the region already gone, and CockroachDB refuses DROP REGION IF EXISTS on a three-region
+                    # database that survives region failure even for a region that is not in it.
+                    still = [db for db in DATABASES
+                             if name in {r[0] for r in self._query(f"SELECT region FROM [SHOW REGIONS FROM DATABASE {db}]")}]
+                    self._run_sql([f"ALTER DATABASE {db} DROP REGION IF EXISTS {_ident(name)}" for db in still])
                 self._drain(op, topo, [n.name for n in topo.nodes if n.region == name], settling=(f"+region={name}:",))
                 self._finish_change(op, new_topo)
             finally:
@@ -353,8 +358,11 @@ class Elastic:
                       settling: tuple[str, ...] = ()) -> None:
         cmd = ["/cockroach/cockroach", "node", "decommission", *ids, f"--wait={wait}", "--insecure",
                f"--host={host}:26257", f"--cluster-name={topo.cluster_id}"]
+        # Marking the nodes (--wait=none) is quick. Waiting until they are fully decommissioned (--wait=all) takes as
+        # long as a busy cluster needs: it ran past two minutes on 13 nodes under payment load.
+        patience = 120 if wait == "none" else DRAIN_ATTEMPTS
         for attempt in range(SETTLE_ATTEMPTS):
-            proc = self._docker.exec(host, cmd, timeout=120, check=False)
+            proc = self._docker.exec(host, cmd, timeout=patience, check=False)
             if proc.returncode == 0:
                 return
             output = (proc.stderr or proc.stdout).strip()
