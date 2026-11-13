@@ -72,3 +72,76 @@ def test_unreachable_cluster_yields_delayed_telemetry():
         raise OSError("down")
     snap = Collector(Docker(), SimpleNamespace(topology=TOPO), Operations(), status_host="haproxy", fetch_json=fetch).refresh()
     assert snap["telemetry"] == {"sql": "delayed"} and snap["cluster"]["status"] == "unreachable"
+
+
+# -- a lapsed liveness record is not, by itself, a dead node --
+
+N2 = NodeSpec("us-east-1b-n2", "us-east-1", "us-east-1b", "aws", 2, "10.77.1.12")
+PAIR = Topology("t", "T", "t", "v26.3.2", "none", "realistic", "256MiB", "256MiB", (REGION,), (NODE, N2))
+PAIR_NODES = {"nodes": [
+    {"desc": {"nodeId": 1, "address": {"addressField": "us-east-1a-n1:26257"}},
+     "storeStatuses": [{"metrics": {"replicas": 40, "replicas.leaseholders": 12, "ranges.unavailable": 0, "ranges.underreplicated": 3}}]},
+    {"desc": {"nodeId": 2, "address": {"addressField": "us-east-1b-n2:26257"}},
+     "storeStatuses": [{"metrics": {"replicas": 41, "replicas.leaseholders": 9, "ranges.unavailable": 0, "ranges.underreplicated": 4}}]},
+]}
+
+
+def records(expires: dict) -> dict:
+    return {"livenesses": [{"nodeId": i, "expiration": {"wallTime": str(int(t * 1e9))}, "membership": 0} for i, t in expires.items()]}
+
+
+def test_running_nodes_stay_live_through_a_short_lapse_of_their_liveness_records():
+    """When the node leading CockroachDB's liveness range dies, no node can renew its record until the range has a
+    new leader: every record lapses for a few seconds although the nodes are up and serving."""
+    both = {"us-east-1a-n1", "us-east-1b-n2"}
+    lapse = records({1: NOW + 4, 2: NOW + 4})
+    live = lambda now, liveness=lapse: [r["is_live"] for r in parse_status(PAIR_NODES, liveness, now, vouched=both)[0]]  # noqa: E731
+    assert live(NOW) == [True, True]
+    assert live(NOW + 5) == [True, True]          # lapsed 1 s ago
+    assert live(NOW + 11.9) == [True, True]       # 7.9 s ago
+    assert live(NOW + 12) == [False, False]       # 8 s: a record this stale means the node is down
+    assert live(NOW + 13, records({1: NOW + 17, 2: NOW + 17})) == [True, True]   # renewed
+
+
+def test_a_node_the_panel_cannot_vouch_for_gets_no_grace():
+    rows, _ = parse_status(PAIR_NODES, records({1: NOW - 1, 2: NOW - 1}), NOW, vouched={"us-east-1a-n1"})
+    assert [r["is_live"] for r in rows] == [True, False]
+    rows, _ = parse_status(PAIR_NODES, records({1: NOW - 1, 2: NOW - 1}), NOW)   # nobody vouched for: the record alone decides
+    assert [r["is_live"] for r in rows] == [False, False]
+
+
+def test_a_node_riding_out_a_lapse_still_reports_its_ranges():
+    _, ranges = parse_status(PAIR_NODES, records({1: NOW - 1, 2: NOW - 1}), NOW, vouched={"us-east-1a-n1", "us-east-1b-n2"})
+    assert ranges == {"unavailable": 0, "underreplicated": 7}
+    _, ranges = parse_status(PAIR_NODES, records({1: NOW - 1, 2: NOW - 1}), NOW)
+    assert ranges == {"unavailable": 0, "underreplicated": 0}
+
+
+def test_crashing_the_liveness_leader_shows_one_node_down_not_the_cluster():
+    """The stage showed 2 of 9 nodes live for a few seconds after one node was crashed: every other record had lapsed.
+    Now: the crashed node (its container is stopped) is down as soon as its record lapses; the running ones are not."""
+    class PairDocker:
+        def list_nodes(self):
+            return [ContainerInfo(NODE.name, "1", True, "running", {}, {"crdb-chaos": NODE.ip}),
+                    ContainerInfo(N2.name, "2", False, "exited", {}, {})]
+    now = [NOW]
+    fetch = lambda host, path: PAIR_NODES if path == "/_status/nodes" else records({1: NOW + 4, 2: NOW + 4})  # noqa: E731
+    c = Collector(PairDocker(), SimpleNamespace(topology=PAIR), Operations(), status_host="haproxy", fetch_json=fetch,
+                  clock=lambda: now[0], network="crdb-chaos")
+    assert [n["liveness"] for n in c.refresh()["nodes"]] == ["live", "live"]   # the cluster hasn't noticed the crash yet
+    now[0] = NOW + 5
+    snap = c.refresh()
+    assert [n["liveness"] for n in snap["nodes"]] == ["live", "dead"]
+    assert snap["cluster"]["live_nodes"] == 1 and snap["cluster"]["status"] == "degraded"
+
+
+def test_a_partitioned_or_isolated_node_is_down_as_soon_as_its_record_lapses():
+    class Detached:
+        def list_nodes(self):
+            return [ContainerInfo(NODE.name, "1", True, "running", {}, {}),                     # off the cluster network
+                    ContainerInfo(N2.name, "2", True, "running", {}, {"crdb-chaos": N2.ip})]
+    fetch = lambda host, path: PAIR_NODES if path == "/_status/nodes" else records({1: NOW - 1, 2: NOW - 1})  # noqa: E731
+    chaos = SimpleNamespace(flags=lambda: {N2.name: {"brownout": None, "isolated": True}}, latency_setting=lambda: "realistic")
+    snap = Collector(Detached(), SimpleNamespace(topology=PAIR), Operations(), status_host="haproxy", fetch_json=fetch,
+                     clock=lambda: NOW, network="crdb-chaos", chaos=chaos).refresh()
+    assert [n["liveness"] for n in snap["nodes"]] == ["dead", "dead"]

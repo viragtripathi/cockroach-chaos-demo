@@ -399,8 +399,17 @@ def _domicile_prepare(ctx: Context, state: dict) -> None:
     supers = [_continent(r) for r in regions]
     if None in supers or len(set(supers)) < len(supers):
         supers = [r.name for r in regions]  # unknown or shared continents: name each super region after its region
-    people = {r.name: CUSTOMERS.get(_continent(r) or "", [("Alex", r.label), ("Sam", r.label), ("Kim", r.label)])
-              for r in regions}
+    # A continent's customers go to its first region; a second region there (N. Virginia and Oregon), or one on no
+    # known continent, gets customers named after its own place. Results are shown per customer, so no two regions
+    # may share them.
+    people, taken = {}, set()
+    for r in regions:
+        continent = _continent(r)
+        if continent in CUSTOMERS and continent not in taken:
+            taken.add(continent)
+            people[r.name] = CUSTOMERS[continent]
+        else:
+            people[r.name] = [("Alex", r.label), ("Sam", r.label), ("Kim", r.label)]
     labels = [r.label for r in regions]
     state.update(regions=[r.name for r in regions], supers=dict(zip([r.name for r in regions], supers)), people=people,
                  region_list=", ".join(labels[:-1]) + f" and {labels[-1]}", abroad=abroad.name,
@@ -509,9 +518,11 @@ def _domicile_node_down(ctx: Context, state: dict) -> dict:
 def _domicile_region_down(ctx: Context, state: dict) -> dict:
     ctx.chaos.act("outage", "region", state["abroad"], confirm=True)
     ctx.workload.mark_failure()
-    ctx.sleep(3)
-    writes = {f"{state['people'][r][0][0]} ({r})": _write(ctx, r, state["people"][r][0][0]) for r in state["regions"]}
+    # Losing a region stalls every region for a few seconds while the leaders it held are re-elected. Payments
+    # measure that; each customer is written once it is over, so a healthy region's customer is never reported as
+    # waiting for their region.
     payments = _wait_recovery(ctx)
+    writes = {f"{state['people'][r][0][0]} ({r})": _write(ctx, r, state["people"][r][0][0]) for r in state["regions"]}
     return {**writes, "Payments": f"recovered in {payments['Recovery time']}, {payments['Money lost']} lost"}
 
 
@@ -755,7 +766,8 @@ def _rbr_matrix(ctx: Context, state: dict, write: bool) -> dict:
 
 RBR = Scenario(
     id="regional-by-row", title="REGIONAL BY ROW", tier=1, min_regions=2, needs_latency=True,
-    summary="Each customer's row lives in their region: local reads and writes in ~1-2 ms everywhere.",
+    summary="Each customer's row lives in their region: local reads in ~1-2 ms everywhere, and writes commit in the "
+            "row's home region.",
     prepare=_rbr_prepare, reset=_drop("rbr_customers"),
     steps=(
         Step("Read from every region", "Reads: local rows are fast, remote rows pay the round trip",

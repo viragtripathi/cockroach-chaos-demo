@@ -225,3 +225,6 @@ agents/run/
 # on this machine; a preset for every install belongs in presets/.
 presets/custom/*
 !presets/custom/README.md
+
+# Booth recordings (takes, final videos, caption files)
+recordings/

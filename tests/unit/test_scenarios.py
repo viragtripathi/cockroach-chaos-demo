@@ -518,6 +518,54 @@ def test_what_to_look_at_is_filled_in_like_the_caption():
     runner.stop()
 
 
+def test_domiciling_checks_each_customer_once_payments_have_recovered(monkeypatch):
+    """Losing a region stalls the whole cluster for a few seconds while the leaders it held are re-elected. A customer
+    in a healthy region must not be reported as waiting for their region because the check raced that."""
+    from controlplane.scenarios import library as L
+    status = {"recovery_s": None, "money_lost": 0, "history": [], "failure_at": 1.0}
+    asked = []
+
+    def workload_status():
+        asked.append(1)
+        if len(asked) >= 3:
+            status["recovery_s"] = 6.0   # payments are back after a few polls
+        return status
+
+    written = []   # (region, had payments recovered when this customer was written?)
+    monkeypatch.setattr(L, "_write", lambda ctx, region, name, seconds=6:
+                        written.append((region, status["recovery_s"] is not None)) or "committed")
+    ctx = SimpleNamespace(chaos=SimpleNamespace(act=lambda *a, **k: None), sleep=lambda s: None, clock=lambda: 0.0,
+                          workload=SimpleNamespace(mark_failure=lambda: None, status=workload_status, check_invariant=lambda: None))
+    regions = ["us-east-1", "us-west-2", "eu-west-1"]
+    out = L._domicile_region_down(ctx, {"abroad": "eu-west-1", "regions": regions, "people": {r: [("P", "c")] for r in regions}})
+    assert [r for r, _ in written] == regions
+    assert all(recovered for _, recovered in written), written
+    assert out["Payments"] == "recovered in 6 s, $0 lost"
+
+
+def test_regional_by_row_promises_local_reads_not_local_write_speed():
+    """Measured on a REGION-survival cluster: a row read at home takes 1-3 ms, but a write at home takes 60-90 ms,
+    because a second region confirms it. The summary on the stage must not promise 1-2 ms writes."""
+    summary = next(s for s in ALL if s.id == "regional-by-row").summary
+    assert "writes in ~1-2 ms" not in summary
+    assert "reads in ~1-2 ms" in summary and "home region" in summary
+
+
+def test_data_domiciling_gives_every_region_its_own_customers():
+    """The default AWS regions put two on one continent (N. Virginia and Oregon). They must not share the same people:
+    results are shown per customer, so one region's Maya would replace the other's."""
+    from controlplane.scenarios import library as L
+    state = {}
+    L._domicile_prepare(ctx_for(AWS9), state)
+    assert state["regions"] == ["us-east-1", "us-west-2", "eu-west-1"]
+    everyone = [person for region in state["regions"] for person in state["people"][region]]
+    assert len(set(everyone)) == len(everyone) == 9, everyone
+    assert state["people"]["us-east-1"][0] == ("Maya", "New York")       # the first region on a continent keeps its names
+    assert state["people"]["eu-west-1"][0] == ("Aoife", "Dublin")
+    assert {city for _, city in state["people"]["us-west-2"]} == {"Oregon"}   # the second one is named after its place
+    assert state["abroad"] == "eu-west-1" and state["abroad_customer"] == "Aoife"
+
+
 def test_data_domiciling_needs_three_regions_two_of_them_with_three_nodes():
     pass
     runner = Runner(ALL, ctx_for(AWS), run_in_background=lambda f: f())
