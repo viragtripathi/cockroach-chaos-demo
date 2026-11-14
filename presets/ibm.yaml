@@ -1,6 +1,6 @@
 # Three IBM Cloud regions, two nodes each.
-display_name: Global Payments
-cluster_id: global-payments
+display_name: Acme Payments
+cluster_id: acme-payments
 survival_goal: auto
 latency: realistic
 regions:

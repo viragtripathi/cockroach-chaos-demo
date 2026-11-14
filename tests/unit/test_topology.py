@@ -16,7 +16,7 @@ def parse(data, name="t"):
 
 
 def aws3():
-    return {"display_name": "Global Payments", "cluster_id": "global-payments", "regions": [
+    return {"display_name": "Acme Payments", "cluster_id": "acme-payments", "regions": [
         {"name": "us-east-1", "provider": "aws", "nodes": 3, "primary": True},
         {"name": "us-west-2", "provider": "aws", "nodes": 3, "secondary": True},
         {"name": "eu-west-1", "provider": "aws", "nodes": 3},
@@ -174,7 +174,7 @@ def test_deployment_model_is_validated():
 
 
 def stretch():
-    return {"display_name": "Global Payments", "cluster_id": "global-payments", "regions": [
+    return {"display_name": "Acme Payments", "cluster_id": "acme-payments", "regions": [
         {"name": "us-east-1", "provider": "aws", "nodes": 2, "primary": True},
         {"name": "eastus", "provider": "azure", "nodes": 2, "secondary": True},
         {"name": "us-east4", "provider": "gcp", "nodes": 1, "tie_breaker": True},

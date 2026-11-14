@@ -1,7 +1,7 @@
 # A two-cloud stretch cluster in one metro: AWS and Azure serve every payment, a single GCP node breaks ties.
 # Every range keeps a copy on all five nodes, so losing a whole cloud still leaves a majority (3 of 5).
-display_name: Global Payments
-cluster_id: global-payments
+display_name: Acme Payments
+cluster_id: acme-payments
 survival_goal: region
 latency: realistic
 regions:

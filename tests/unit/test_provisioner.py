@@ -127,7 +127,7 @@ def test_provision_creates_every_node_inits_bootstraps_and_routes(tmp_path):
     assert [r[0] for r in docker.ran] == [n.name for n in CLASSIC.nodes]
     assert docker.ran[0][1] == ("us-east-1a-n1:26257", "us-east-1b-n2:26257", "us-west-2a-n1:26257")
     init = docker.execs[0][1]
-    assert init[:2] == ["/cockroach/cockroach", "init"] and "--cluster-name=global-payments" in init
+    assert init[:2] == ["/cockroach/cockroach", "init"] and "--cluster-name=acme-payments" in init
     assert 'ALTER DATABASE defaultdb SET PRIMARY REGION "us-east-1"' in db.executed
     assert p._lb.applied[-1] == [n.name for n in CLASSIC.nodes]
     assert load_state(tmp_path)["provisioned"] is True

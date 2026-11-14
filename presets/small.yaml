@@ -1,7 +1,7 @@
 # One node per region for laptops with 8 GB. Plain 3x replication still
 # survives a region outage; scenarios that need multi-region SQL are unavailable.
-display_name: Global Payments
-cluster_id: global-payments
+display_name: Acme Payments
+cluster_id: acme-payments
 survival_goal: auto
 latency: realistic
 regions:

@@ -28,7 +28,7 @@ def test_customer_name_comes_from_presets_not_code():
     for folder in ("controlplane", "web"):
         for path in (ROOT / folder).rglob("*"):
             if path.suffix in (".py", ".js", ".html", ".css"):
-                assert "Global Payments" not in path.read_text(encoding="utf-8"), path
+                assert "Acme Payments" not in path.read_text(encoding="utf-8"), path
 
 
 def test_shared_tooltip_wording_follows_the_stage_rules():

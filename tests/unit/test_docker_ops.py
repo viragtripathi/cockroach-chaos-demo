@@ -34,7 +34,7 @@ def test_node_run_args_carry_identity_locality_and_limits():
     assert args[i + 1:i + 3] == ["start", "--insecure"]
     assert "--advertise-addr=us-east-1a-n1:26257" in args
     assert "--locality=cloud=aws,region=us-east-1,zone=us-east-1a" in args
-    assert "--cluster-name=global-payments" in args
+    assert "--cluster-name=acme-payments" in args
     assert "--join=us-east-1a-n1:26257,us-east-1b-n2:26257" in args
     assert "--cache=256MiB" in args and "--max-sql-memory=256MiB" in args
 

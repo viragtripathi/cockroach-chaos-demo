@@ -171,7 +171,7 @@ def test_decommission_drains_then_removes_and_reroutes(tmp_path):
     assert op["status"] == "done", op
     cmds = [c for _, c in docker.execs]
     assert cmds[0][:3] == ["/cockroach/cockroach", "node", "decommission"] and "4" in cmds[0] and "--wait=none" in cmds[0]
-    assert "--cluster-name=global-payments" in cmds[0]
+    assert "--cluster-name=acme-payments" in cmds[0]
     assert docker.execs[0][0] != "us-west-2b-n2"  # run from another node
     assert docker.removed == ["us-west-2b-n2"] and "us-west-2b-n2" not in lb.applied[-1]
     assert all(n.name != "us-west-2b-n2" for n in prov.topology.nodes)

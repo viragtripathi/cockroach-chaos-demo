@@ -15,7 +15,7 @@
 The stage never says where it runs: no hostnames, ports or connection strings, and provisioning reads like a
 cloud ("Allocating capacity in us-east-1…"). Keep the presenter console and terminals off the big screen. If you
 want a cloud-looking address in the browser bar, add a hosts-file entry such as
-`127.0.0.1 console.global-payments.example` and open `http://console.global-payments.example:8088`.
+`127.0.0.1 console.acme-payments.example` and open `http://console.acme-payments.example:8088`.
 
 ## 5 minutes: "you can't break it"
 

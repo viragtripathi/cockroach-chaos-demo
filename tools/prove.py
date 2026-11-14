@@ -931,7 +931,7 @@ def main() -> int:
         html_ = render_chaos((ROOT / "web" / "explainers" / "chaos.html").read_text(), azure, catalog, "Contoso Pay")
         r = browser(p, [{"do": "open", "url": f"{PANEL}/explainer/chaos?capture=1&t=20", "settle": 4000},
                         {"do": "shot", "file": p.shot("explainer-chaos")}])
-        ev.update({"explainers offered": listed, "names the running cluster": "Global Payments" in page and "us-east-1" in page,
+        ev.update({"explainers offered": listed, "names the running cluster": "Acme Payments" in page and "us-east-1" in page,
                    "azure preset gets azure regions": "eastus" in html_ and "us-east-1" not in html_.split("<script>")[1][:20000],
                    "frame": p.shot("explainer-chaos")})
         check("chaos" in listed and ev["names the running cluster"] and ev["azure preset gets azure regions"], "explainer checks failed")

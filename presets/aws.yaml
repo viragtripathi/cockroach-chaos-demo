@@ -1,7 +1,7 @@
 # Three AWS regions, two nodes each (balanced for a laptop). Survives a full region outage.
 # Add nodes from the stage (+ Node) or the presenter when the machine has room.
-display_name: Global Payments
-cluster_id: global-payments
+display_name: Acme Payments
+cluster_id: acme-payments
 survival_goal: auto
 latency: realistic
 regions:
